@@ -1,0 +1,8 @@
+clip,condition,kind,expected,absent,notes
+s1-normal-idle.mp4,normal,idle,,,
+s1-normal-scripted.mp4,normal,scripted,R1 R2 R3 L1 L2 L3 R4 R5 L4 L5 R1 L1,,
+s1-lowlight-idle.mp4,lowlight,idle,,,screen only; lux reading here
+s1-lowlight-scripted.mp4,lowlight,scripted,R1 R2 R3 L1 L2 L3 R4 R5 L4 L5 R1 L1,,screen only; lux reading here
+s1-fast-scripted.mp4,fast,scripted,R1 R2 R3 L1 L2 L3 R4 R5 L4 L5 R1 L1,,
+s1-occlusion-idle.mp4,occlusion,idle,,,holding a drumstick
+s1-occlusion-scripted.mp4,occlusion,scripted,R1 R2 R3 L1 L2 L3 R4 R5 L4 L5 R1 L1,12.0-15.5,hand left frame at 12 s

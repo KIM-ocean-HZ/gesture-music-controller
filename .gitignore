@@ -35,3 +35,7 @@ screenshot_*.png
 
 # Logs
 *.log
+
+# Measurement: recorded clips show your face — keep them local
+recordings/
+results/*/logs/

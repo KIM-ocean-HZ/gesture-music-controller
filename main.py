@@ -24,9 +24,16 @@ Usage:
   python main.py --camera 1              # second webcam
   python main.py --demo                  # no audio required (visual only)
   python main.py --width 640 --height 480 --swipe-threshold 35
+
+Measurement (see docs/MEASUREMENT.md):
+  python main.py --demo --record recordings/clip.mp4     # save raw camera frames
+  python main.py --input recordings/clip.mp4 --log out.jsonl   # headless replay
+  python main.py --log live.jsonl                        # per-frame log, live
 """
 
 import argparse
+import csv
+import json
 import logging
 import math
 import random
@@ -368,6 +375,27 @@ class GestureEngine:
     def record_action(self, current_time: float):
         self._action_ts = current_time
 
+    def detect_swipe(self, current_time: float) -> Optional[str]:
+        """
+        Return "right" / "left" when a swipe fires on this frame, else None.
+
+        A swipe needs at least one extended finger, |EMA velocity| above the
+        threshold, and the cooldown to have elapsed.  Every swipe that fires
+        restarts the cooldown, whether or not it changes a loop, so the same
+        motion cannot fire twice.
+        """
+        if self.finger_count <= 0 or not self.cooldown_ok(current_time):
+            return None
+        thr = self.cfg.swipe_velocity_threshold
+        if self.ema_velocity > thr:
+            direction = "right"
+        elif self.ema_velocity < -thr:
+            direction = "left"
+        else:
+            return None
+        self.record_action(current_time)
+        return direction
+
     def check_nod(self, face_landmarks, current_time: float) -> Optional[float]:
         """
         Detect a downward head nod via nose-tip Y velocity reversal.
@@ -401,11 +429,11 @@ class AnimationManager:
     def __init__(self):
         self._anims: List[dict] = []
 
-    def add(self, anim_type: str, **kwargs):
+    def add(self, anim_type: str, now: Optional[float] = None, **kwargs):
         entry = {
             "type":       anim_type,
             "text":       None,
-            "start_time": time.time(),
+            "start_time": time.time() if now is None else now,
             "duration":   1.2,
             "priority":   99,
             "color":      (255, 255, 255),
@@ -574,11 +602,12 @@ class Renderer:
         visual_mode: str,
         fw: int,
         fh: int,
+        now: float,
     ) -> np.ndarray:
         ov = np.zeros_like(canvas, dtype=np.uint8)
 
         for anim in anims:
-            progress = (time.time() - anim["start_time"]) / anim["duration"]
+            progress = (now - anim["start_time"]) / anim["duration"]
             atype    = anim["type"]
 
             if atype == "integrated_hud":
@@ -669,6 +698,124 @@ class Renderer:
 
 
 # ---------------------------------------------------------------------------
+# Frame sources, recording and per-frame logging (measurement support)
+# ---------------------------------------------------------------------------
+def timestamps_path(video_path: Path) -> Path:
+    """Sidecar CSV that stores each recorded frame's capture time."""
+    return video_path.with_suffix(".frames.csv")
+
+
+class CameraSource:
+    """Live webcam.  Timestamps are wall-clock seconds taken right after read."""
+
+    live = True
+
+    def __init__(self, cfg: Config):
+        cap = cv2.VideoCapture(cfg.camera_index, cv2.CAP_AVFOUNDATION)
+        if not cap.isOpened():
+            cap = cv2.VideoCapture(cfg.camera_index)
+        if not cap.isOpened():
+            log.error("Cannot open camera index %d.", cfg.camera_index)
+            sys.exit(1)
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH,  cfg.frame_width)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, cfg.frame_height)
+        time.sleep(0.8)   # allow camera to warm up
+        self.cap = cap
+        self.nominal_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+
+    def read(self) -> Tuple[bool, Optional[np.ndarray], float]:
+        ret, frame = self.cap.read()
+        return ret, frame, time.time()
+
+    def release(self):
+        self.cap.release()
+
+
+class VideoFileSource:
+    """
+    Replays a recorded clip frame by frame (no frames are dropped).
+    Timestamps come from the clip's .frames.csv sidecar when present, so
+    time-based logic (cooldowns, loop boundaries) sees the recorded timing;
+    otherwise they are derived from the container's frame rate.
+    """
+
+    live = False
+
+    def __init__(self, path: Path):
+        self.cap = cv2.VideoCapture(str(path))
+        if not self.cap.isOpened():
+            raise FileNotFoundError(f"Cannot open video {path}")
+        self.nominal_fps = self.cap.get(cv2.CAP_PROP_FPS) or 30.0
+        self._idx = 0
+        self._times: List[float] = []
+        ts_file = timestamps_path(path)
+        if ts_file.exists():
+            with open(ts_file, newline="") as fh:
+                self._times = [float(row["t"]) for row in csv.DictReader(fh)]
+        else:
+            log.warning("No %s — using %.1f fps for timestamps.",
+                        ts_file.name, self.nominal_fps)
+
+    def read(self) -> Tuple[bool, Optional[np.ndarray], float]:
+        ret, frame = self.cap.read()
+        if self._idx < len(self._times):
+            t = self._times[self._idx]
+        else:
+            t = self._idx / self.nominal_fps
+        self._idx += 1
+        return ret, frame, t
+
+    def release(self):
+        self.cap.release()
+
+
+class ClipRecorder:
+    """Writes raw (un-mirrored) camera frames plus a capture-time sidecar."""
+
+    def __init__(self, path: Path, fps: float, size: Tuple[int, int]):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fourcc = "MJPG" if path.suffix.lower() == ".avi" else "mp4v"
+        self.writer = cv2.VideoWriter(
+            str(path), cv2.VideoWriter_fourcc(*fourcc), fps, size
+        )
+        if not self.writer.isOpened():
+            raise RuntimeError(f"Cannot write video {path}")
+        self._ts_fh = open(timestamps_path(path), "w", newline="")
+        self._ts = csv.writer(self._ts_fh)
+        self._ts.writerow(["frame", "t"])
+        self._idx = 0
+        log.info("Recording to %s", path)
+
+    def write(self, frame: np.ndarray, t: float):
+        self.writer.write(frame)
+        self._ts.writerow([self._idx, f"{t:.6f}"])
+        self._idx += 1
+
+    def close(self):
+        self.writer.release()
+        self._ts_fh.close()
+
+
+class FrameLog:
+    """
+    One JSON object per processed frame (JSON Lines).  The first line is a
+    header describing the run.  `perf_read` / `play` use time.perf_counter()
+    and are only meaningful for live runs (software latency).
+    """
+
+    def __init__(self, path: Path, header: dict):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self._fh = open(path, "w")
+        self.write({"header": header})
+
+    def write(self, record: dict):
+        self._fh.write(json.dumps(record) + "\n")
+
+    def close(self):
+        self._fh.close()
+
+
+# ---------------------------------------------------------------------------
 # Main application
 # ---------------------------------------------------------------------------
 class GestureMusicController:
@@ -680,11 +827,22 @@ class GestureMusicController:
     _SET_NAMES = ["HousePiano", "BluesGuitar", "FunkGuitar"]
     _SET_KEYS  = [ord("p"),     ord("g"),      ord("f")]
 
-    def __init__(self, cfg: Config, demo_mode: bool = False):
+    def __init__(
+        self,
+        cfg: Config,
+        demo_mode: bool = False,
+        source=None,
+        recorder: Optional[ClipRecorder] = None,
+        frame_log: Optional[FrameLog] = None,
+        headless: bool = False,
+    ):
         self.cfg        = cfg
         self.demo_mode  = demo_mode
         self.visual_mode: str  = "reality"
         self.show_help: bool   = False
+        self.recorder   = recorder
+        self.frame_log  = frame_log
+        self.headless   = headless
 
         # Sub-systems
         self.audio    = AudioEngine(cfg, demo_mode)
@@ -716,20 +874,7 @@ class GestureMusicController:
             min_detection_confidence=0.5, min_tracking_confidence=0.5,
         )
 
-        self.cap = self._open_camera()
-
-    # ------------------------------------------------------------------
-    def _open_camera(self) -> cv2.VideoCapture:
-        cap = cv2.VideoCapture(self.cfg.camera_index, cv2.CAP_AVFOUNDATION)
-        if not cap.isOpened():
-            cap = cv2.VideoCapture(self.cfg.camera_index)
-        if not cap.isOpened():
-            log.error("Cannot open camera index %d.", self.cfg.camera_index)
-            sys.exit(1)
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH,  self.cfg.frame_width)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.cfg.frame_height)
-        time.sleep(0.8)   # allow camera to warm up
-        return cap
+        self.source = source if source is not None else CameraSource(cfg)
 
     # ------------------------------------------------------------------
     def _next_beat(self, now: float) -> float:
@@ -759,13 +904,17 @@ class GestureMusicController:
                       color=(200, 220, 255))
 
     # ------------------------------------------------------------------
-    def _process_queues(self, now: float):
+    def _process_queues(self, now: float) -> List[Tuple[int, float]]:
+        """Start / stop due loops.  Returns [(loop index, perf time of play)]."""
+        played: List[Tuple[int, float]] = []
         for item in self.quant_queue[:]:
             if now >= item["start_time"]:
                 idx = item["index"]
                 self.loop_states[idx]["status"] = "locked"
                 self.audio.play_loop(idx)
-                self.anim.add("color_splash", color=LOOP_COLORS[idx], duration=0.8)
+                played.append((idx, time.perf_counter()))
+                self.anim.add("color_splash", now=now,
+                              color=LOOP_COLORS[idx], duration=0.8)
                 self.quant_queue.remove(item)
 
         for item in self.stop_queue[:]:
@@ -774,12 +923,15 @@ class GestureMusicController:
                 self.loop_states[idx]["status"] = "inactive"
                 self.audio.stop_loop(idx)
                 self.stop_queue.remove(item)
+        return played
 
     # ------------------------------------------------------------------
-    def _handle_gesture(self, hand_results, fw: int, now: float):
+    def _handle_gesture(self, hand_results, fw: int, now: float) -> dict:
+        """Update gesture state and loops.  Returns a summary for the log."""
+        info: dict = {"hand": False}
         if not hand_results.multi_hand_landmarks:
             self.gesture.hand_lost()
-            return
+            return info
 
         hand_lm = hand_results.multi_hand_landmarks[0]
         label   = "Right"
@@ -788,45 +940,51 @@ class GestureMusicController:
 
         finger_count, velocity = self.gesture.update_hand(hand_lm, label, fw)
         self.audio.set_volume(self.gesture.pinch_volume)
+        info.update(hand=True, handedness=label, fingers=finger_count,
+                    vel=round(velocity, 2))
 
-        if finger_count <= 0 or not self.gesture.cooldown_ok(now):
-            return
-
+        swipe = self.gesture.detect_swipe(now)
+        if swipe is None:
+            return info
+        info["swipe"] = swipe
         idx = finger_count - 1
-        thr = self.cfg.swipe_velocity_threshold
 
-        if velocity > thr and self.loop_states[idx]["status"] == "inactive":
+        if swipe == "right" and self.loop_states[idx]["status"] == "inactive":
             if self.master_clock is None:
                 self.master_clock  = now
                 self.master_length = self.audio.loop_length(idx)
                 self.quant_queue.append({"index": idx, "start_time": now})
+                info["action"] = "start"
             else:
                 self.quant_queue.append(
                     {"index": idx, "start_time": self._next_beat(now)}
                 )
+                info["action"] = "queue"
             self.loop_states[idx]["status"] = "queued"
-            self.gesture.record_action(now)
             self.anim.add(
                 "integrated_hud",
+                now=now,
                 text=f"LOOP {idx + 1} QUEUED",
                 direction="right",
                 color=LOOP_COLORS[idx],
                 priority=self._action_priority(idx, "queued"),
             )
 
-        elif velocity < -thr and self.loop_states[idx]["status"] == "locked":
+        elif swipe == "left" and self.loop_states[idx]["status"] == "locked":
             self.stop_queue.append(
                 {"index": idx, "stop_time": self._next_beat(now)}
             )
             self.loop_states[idx]["status"] = "stopping"
-            self.gesture.record_action(now)
+            info["action"] = "stop"
             self.anim.add(
                 "integrated_hud",
+                now=now,
                 text=f"LOOP {idx + 1} STOPPING",
                 direction="left",
                 color=LOOP_COLORS[idx],
                 priority=self._action_priority(idx, "stopping"),
             )
+        return info
 
     # ------------------------------------------------------------------
     def _handle_face(self, face_results, now: float):
@@ -835,7 +993,8 @@ class GestureMusicController:
         face_lm   = face_results.multi_face_landmarks[0].landmark
         intensity = self.gesture.check_nod(face_lm, now)
         if intensity is not None:
-            self.anim.add("rhythmic_flash", duration=0.15, intensity=intensity)
+            self.anim.add("rhythmic_flash", now=now,
+                          duration=0.15, intensity=intensity)
 
     # ------------------------------------------------------------------
     def _handle_key(self, key: int, canvas: np.ndarray) -> bool:
@@ -864,32 +1023,32 @@ class GestureMusicController:
         log.info("Visual: 1 = Artistic | 2 = Reality   Sound: p / g / f")
         log.info("Press h for controls, q to quit.")
         self.audio.play_startup()
+        frame_idx = 0
 
         try:
             while True:
                 t0  = time.perf_counter()
-                ret, frame = self.cap.read()
+                ret, frame, now = self.source.read()
                 if not ret:
-                    log.warning("Frame read failed — camera disconnected?")
+                    if self.source.live:
+                        log.warning("Frame read failed — camera disconnected?")
                     break
+                t_read = time.perf_counter()
+
+                if self.recorder:
+                    self.recorder.write(frame, now)
 
                 frame = cv2.flip(frame, 1)
                 fh, fw = frame.shape[:2]
-                now   = time.time()
-
-                canvas = (
-                    np.zeros_like(frame) if self.visual_mode == "artistic"
-                    else frame.copy()
-                )
 
                 # ── Core logic ──────────────────────────────────────────
-                self._process_queues(now)
+                played = self._process_queues(now)
 
                 rgb      = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 hand_res = self._mp_hands.process(rgb)
                 face_res = self._mp_face.process(rgb)
 
-                self._handle_gesture(hand_res, fw, now)
+                info = self._handle_gesture(hand_res, fw, now)
                 self._handle_face(face_res, now)
 
                 # Auto-reset master clock when all loops go inactive
@@ -899,6 +1058,25 @@ class GestureMusicController:
                     self.master_clock = None
                     self.quant_queue.clear()
                     self.stop_queue.clear()
+
+                if self.frame_log:
+                    rec = {"i": frame_idx, "t": round(now, 6), **info}
+                    if played:
+                        rec["played"] = [i + 1 for i, _ in played]
+                    if self.source.live:
+                        rec["perf_read"] = round(t_read, 6)
+                        if played:
+                            rec["perf_play"] = [round(p, 6) for _, p in played]
+                    self.frame_log.write(rec)
+                frame_idx += 1
+
+                if self.headless:
+                    continue
+
+                canvas = (
+                    np.zeros_like(frame) if self.visual_mode == "artistic"
+                    else frame.copy()
+                )
 
                 # ── Rendering ───────────────────────────────────────────
                 beat_prog = 0.0
@@ -933,7 +1111,7 @@ class GestureMusicController:
                 ]
                 canvas = self.renderer.draw_animations(
                     canvas, active_anims, active_colors,
-                    self.visual_mode, fw, fh,
+                    self.visual_mode, fw, fh, now,
                 )
 
                 # FPS counter
@@ -956,8 +1134,13 @@ class GestureMusicController:
     def _cleanup(self):
         log.info("Shutting down…")
         self.audio.stop_all()
-        self.cap.release()
-        cv2.destroyAllWindows()
+        self.source.release()
+        if self.recorder:
+            self.recorder.close()
+        if self.frame_log:
+            self.frame_log.close()
+        if not self.headless:
+            cv2.destroyAllWindows()
         self._mp_hands.close()
         self._mp_face.close()
         self.audio.quit()
@@ -981,7 +1164,31 @@ def _parse_args() -> argparse.Namespace:
                    help="Disable audio — no .wav files required")
     p.add_argument("--swipe-threshold", type=int, default=45,  metavar="PX",
                    help="Swipe velocity threshold in px/frame (default: 45)")
+    p.add_argument("--record",          type=Path, metavar="FILE",
+                   help="Save raw camera frames to FILE (.mp4 or .avi) "
+                        "plus a .frames.csv of capture times")
+    p.add_argument("--input",           type=Path, metavar="FILE",
+                   help="Replay a recorded clip instead of the camera "
+                        "(headless unless --show; audio off)")
+    p.add_argument("--show",            action="store_true",
+                   help="With --input: also open the preview window")
+    p.add_argument("--log",             type=Path, metavar="FILE",
+                   help="Write one JSON line per processed frame to FILE")
     return p.parse_args()
+
+
+def run_header(cfg: Config, source_kind: str, input_path: Optional[Path]) -> dict:
+    """Describe a run for the first line of a frame log."""
+    return {
+        "source": source_kind,
+        "input": str(input_path) if input_path else None,
+        "started": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "swipe_velocity_threshold": cfg.swipe_velocity_threshold,
+        "action_cooldown": cfg.action_cooldown,
+        "ema_alpha": cfg.ema_alpha,
+        "mediapipe": mp.__version__,
+        "opencv": cv2.__version__,
+    }
 
 
 if __name__ == "__main__":
@@ -992,4 +1199,34 @@ if __name__ == "__main__":
         frame_height             = args.height,
         swipe_velocity_threshold = args.swipe_threshold,
     )
-    GestureMusicController(cfg, demo_mode=args.demo).run()
+    if args.input and args.record:
+        sys.exit("--record needs the live camera; it cannot be used with --input.")
+
+    if args.input:
+        source = VideoFileSource(args.input)
+    else:
+        source = CameraSource(cfg)
+
+    recorder = None
+    if args.record:
+        ok, probe, _ = source.read()   # first frame fixes the clip size
+        if not ok:
+            sys.exit("Camera returned no frame; nothing to record.")
+        h, w = probe.shape[:2]
+        recorder = ClipRecorder(args.record, source.nominal_fps, (w, h))
+
+    frame_log = None
+    if args.log:
+        frame_log = FrameLog(
+            args.log,
+            run_header(cfg, "replay" if args.input else "live", args.input),
+        )
+
+    GestureMusicController(
+        cfg,
+        demo_mode = args.demo or bool(args.input),
+        source    = source,
+        recorder  = recorder,
+        frame_log = frame_log,
+        headless  = bool(args.input) and not args.show,
+    ).run()
