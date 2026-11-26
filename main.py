@@ -1302,14 +1302,15 @@ class GestureMusicController:
                 fh, fw = frame.shape[:2]
 
                 # ── Core logic ──────────────────────────────────────────
-                played = self._process_queues(now)
-
                 rgb      = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 hand_res = self._mp_hands.process(rgb)
                 face_res = self._mp_face.process(rgb)
 
                 info = self._handle_gesture(hand_res, fw, now, fh)
                 self._handle_face(face_res, now)
+                # After the gesture, so a loop started from silence plays in
+                # the frame that triggered it, not on the next frame.
+                played = self._process_queues(now)
 
                 # Auto-reset master clock when all loops go inactive
                 if self.master_clock is not None and all(

@@ -51,9 +51,9 @@ one (edit distance). Timing is not checked, only order.
   camera capture (exposure → frame delivered to the app); audio output
   (`play()` → sound from the speakers: pygame's 512-sample buffer is about
   11.6 ms at 44.1 kHz, plus the device); and the time a swipe takes before its
-  smoothed velocity crosses the threshold. In the current code an immediate start
-  is played on the *next* frame's queue check, so software latency includes about
-  one frame interval.
+  smoothed velocity crosses the threshold. Since 2026-11-26 an immediate start is
+  played in the frame that triggered it; before, it was played on the next
+  frame's queue check, which added about one frame interval.
 - **Queued loops** wait for the master-loop boundary by design; latency does not
   apply to them.
 
