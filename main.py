@@ -148,26 +148,53 @@ def dist_norm(a, b) -> float:
 
 
 # ---------------------------------------------------------------------------
-# Finger counting — handedness-aware (correct thumb detection on both hands)
+# Finger counting in hand geometry, independent of palm/back and handedness
 # ---------------------------------------------------------------------------
 _TIP_IDS = [4, 8, 12, 16, 20]
 
 
-def count_fingers(hand_landmarks, handedness_label: str) -> int:
-    """Return 0-5 extended fingers, handling mirrored thumb for left hand."""
-    lm = hand_landmarks.landmark
-    fingers: List[int] = []
-    # Thumb: check x-direction relative to hand orientation
-    if handedness_label == "Right":
-        fingers.append(1 if lm[_TIP_IDS[0]].x > lm[_TIP_IDS[0] - 1].x else 0)
-    else:
-        fingers.append(1 if lm[_TIP_IDS[0]].x < lm[_TIP_IDS[0] - 1].x else 0)
-    # Four fingers: tip y < knuckle-2 y  (smaller y = higher in frame)
-    for i in range(1, 5):
-        fingers.append(
-            1 if lm[_TIP_IDS[i]].y < lm[_TIP_IDS[i] - 2].y else 0
-        )
-    return sum(fingers)
+def count_fingers(hand_landmarks, handedness_label: str = "",
+                  frame_width: int = 1, frame_height: int = 1) -> int:
+    """Count extension using joint shape, not screen-up or thumb x direction.
+
+    MediaPipe x/z use approximately image-width units; y uses image height.
+    Correct the aspect ratio before comparing angles/distances. The handedness
+    argument is retained for callers but does not decide whether a thumb is up.
+    These geometric rules still depend on the quality of the detected landmarks.
+    """
+    points = np.array([(p.x, p.y * frame_height / frame_width, p.z)
+                       for p in hand_landmarks.landmark], dtype=float)
+    if points.shape != (21, 3) or not np.isfinite(points).all():
+        return 0
+
+    def distance(a, b):
+        return float(np.linalg.norm(points[a] - points[b]))
+
+    def straight(a, joint, b, degrees):
+        u, v = points[a] - points[joint], points[b] - points[joint]
+        size = float(np.linalg.norm(u) * np.linalg.norm(v))
+        return size > 1e-12 and float(np.dot(u, v)) / size < math.cos(math.radians(degrees))
+
+    palm_width = distance(5, 17)
+    if palm_width < 1e-6:
+        return 0
+    # A tucked thumb can be straight too: require it to reach away from the
+    # little-finger knuckle, measured against this hand's own palm width.
+    thumb = straight(2, 3, 4, 135) and distance(4, 17) > 1.25 * palm_width
+    # For the four fingers retain the visible tip-past-knuckle rule, but
+    # measure it along the palm's own axis instead of screen-up. Requiring
+    # perfectly straight 3-D joints rejects naturally relaxed raised fingers;
+    # the small palm-relative margin rejects nearly coincident noisy points.
+    axis = points[9, :2] - points[0, :2]
+    axis_length = float(np.linalg.norm(axis))
+    if axis_length < 1e-6:
+        return int(thumb)
+    palm_width_2d = float(np.linalg.norm(points[5, :2] - points[17, :2]))
+    margin = 0.04 * palm_width_2d
+    axis /= axis_length
+    fingers = sum(float(np.dot(points[mcp + 3, :2] - points[mcp + 1, :2], axis)) > margin
+                  for mcp in (5, 9, 13, 17))
+    return int(thumb) + fingers
 
 
 # ---------------------------------------------------------------------------
@@ -330,13 +357,15 @@ class GestureEngine:
         hand_landmarks,
         handedness_label: str,
         frame_width: int,
+        frame_height: int = 720,
     ) -> Tuple[int, float]:
         """
         Process one hand frame.
         Returns (finger_count, ema_velocity_x).
         Positive velocity → rightward swipe; negative → leftward.
         """
-        self.finger_count = count_fingers(hand_landmarks, handedness_label)
+        self.finger_count = count_fingers(
+            hand_landmarks, handedness_label, frame_width, frame_height)
 
         wrist_x = int(
             hand_landmarks.landmark[
@@ -926,7 +955,8 @@ class GestureMusicController:
         return played
 
     # ------------------------------------------------------------------
-    def _handle_gesture(self, hand_results, fw: int, now: float) -> dict:
+    def _handle_gesture(self, hand_results, fw: int, now: float,
+                        fh: Optional[int] = None) -> dict:
         """Update gesture state and loops.  Returns a summary for the log."""
         info: dict = {"hand": False}
         if not hand_results.multi_hand_landmarks:
@@ -938,7 +968,8 @@ class GestureMusicController:
         if hand_results.multi_handedness:
             label = hand_results.multi_handedness[0].classification[0].label
 
-        finger_count, velocity = self.gesture.update_hand(hand_lm, label, fw)
+        finger_count, velocity = self.gesture.update_hand(
+            hand_lm, label, fw, fh or self.cfg.frame_height)
         self.audio.set_volume(self.gesture.pinch_volume)
         info.update(hand=True, handedness=label, fingers=finger_count,
                     vel=round(velocity, 2))
@@ -1048,7 +1079,7 @@ class GestureMusicController:
                 hand_res = self._mp_hands.process(rgb)
                 face_res = self._mp_face.process(rgb)
 
-                info = self._handle_gesture(hand_res, fw, now)
+                info = self._handle_gesture(hand_res, fw, now, fh)
                 self._handle_face(face_res, now)
 
                 # Auto-reset master clock when all loops go inactive
