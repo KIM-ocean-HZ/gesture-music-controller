@@ -175,6 +175,24 @@ class SwipeTest(unittest.TestCase):
             self.feed(0.8 + i / 30, 0.61 - 0.7 * i / 30)
         self.assertEqual(self.events, [("right", 1)])
 
+    def test_selection_updates_while_the_hand_moves_slowly(self):
+        self.ready()
+        for i in range(1, 10):    # show 5 while drifting right at 0.2 widths/s
+            self.feed(0.5 + i / 30, 0.4 + 0.2 * i / 30, pose=self.five)
+        self.assertEqual(self.g.finger_count, 5)
+        for i in range(1, 12):    # the same movement speeds up into a swipe
+            self.feed(0.8 + i / 30, 0.46 + 0.7 * i / 30, pose=self.five)
+        self.assertEqual(self.events, [("right", 5)])
+
+    def test_target_returns_after_a_long_loss_while_the_hand_moves(self):
+        self.ready()
+        self.g.hand_lost(0.6)
+        self.g.hand_lost(1.0)     # longer than the grace period: cleared
+        self.assertEqual(self.g.finger_count, 0)
+        for i in range(8):        # back in view, drifting at 0.2 widths/s
+            self.feed(1.5 + i / 30, 0.3 + 0.2 * i / 30, pose=self.five)
+        self.assertEqual(self.g.finger_count, 5)
+
 
 if __name__ == "__main__":
     unittest.main()
