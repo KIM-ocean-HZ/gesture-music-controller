@@ -23,7 +23,7 @@ Usage:
   python main.py                         # default camera, 1280×720
   python main.py --camera 1              # second webcam
   python main.py --demo                  # no audio required (visual only)
-  python main.py --width 640 --height 480 --swipe-threshold 35
+  python main.py --width 640 --height 480 --swipe-threshold 0.35
 
 Measurement (see docs/MEASUREMENT.md):
   python main.py --demo --record recordings/clip.mp4     # save raw camera frames
@@ -83,9 +83,16 @@ class Config:
     frame_height: int = 720
 
     # Gesture thresholds
-    swipe_velocity_threshold: int = 45   # px/frame to register a swipe
+    swipe_velocity_threshold: float = 0.35  # frame widths / second
+    swipe_min_distance: float = 0.09     # fraction of image width
+    swipe_window_s: float = 0.45
+    swipe_min_duration_s: float = 0.06
+    velocity_smoothing_s: float = 0.06   # time constant, independent of FPS
+    selection_settle_s: float = 0.12
+    tracking_grace_s: float = 0.22       # hold selection, never guess lost motion
+    motion_release_speed: float = 0.12  # frame widths / second
+    motion_release_s: float = 0.12
     action_cooldown: float = 0.8         # minimum seconds between actions
-    ema_alpha: float = 0.4               # EMA weight for velocity smoothing
 
     # Head-nod
     nod_cooldown: float = 0.15
@@ -336,27 +343,53 @@ class GestureEngine:
     """
     Converts raw MediaPipe landmark streams into high-level gesture events.
 
-    Swipe detection uses an exponential moving average (EMA) over raw wrist
-    displacement to suppress high-frequency noise while preserving intent.
+    Settle a loop selection, then latch it for a horizontal stroke. Motion uses
+    capture timestamps and image-width units, not pixels per processed frame.
     """
 
     def __init__(self, cfg: Config):
         self.cfg = cfg
-        self._last_wrist_x: Optional[int] = None
-        self.ema_velocity: float = 0.0
-        self._action_ts: float = 0.0
-        self.finger_count: int = 0
+        self._action_ts: float = -math.inf
         self.pinch_volume: float = cfg.default_volume
+        self._reset_hand()
 
         # Head nod
         self._head_y: deque = deque(maxlen=cfg.head_history_len)
         self._last_nod_ts: float = 0.0
+
+    def _clear_stroke(self):
+        self._motion: deque = deque()
+        self._stroke_target = 0
+        self._stroke_sign = 0
+        self._stroke_fired = False
+        self._still_since: Optional[float] = None
+
+    def _reset_hand(self):
+        self._last_seen: Optional[float] = None
+        self._last_sample = None
+        self._tracked = False
+        self.tracking_held = False
+        self.ema_velocity = 0.0
+        self.raw_finger_count = 0
+        self.finger_count = 0
+        self.swipe_fingers = 0
+        self._candidate_count = 0
+        self._candidate_since: Optional[float] = None
+        self._clear_stroke()
+
+    def _settle_selection(self, now):
+        if self.raw_finger_count != self._candidate_count or self._candidate_since is None:
+            self._candidate_count = self.raw_finger_count
+            self._candidate_since = now
+        if now - self._candidate_since >= self.cfg.selection_settle_s:
+            self.finger_count = self._candidate_count
 
     def update_hand(
         self,
         hand_landmarks,
         handedness_label: str,
         frame_width: int,
+        current_time: float,
         frame_height: int = 720,
     ) -> Tuple[int, float]:
         """
@@ -364,24 +397,51 @@ class GestureEngine:
         Returns (finger_count, ema_velocity_x).
         Positive velocity → rightward swipe; negative → leftward.
         """
-        self.finger_count = count_fingers(
+        if self._last_seen is not None and (
+            current_time <= self._last_seen
+            or current_time - self._last_seen > self.cfg.tracking_grace_s
+        ):
+            self._reset_hand()
+        self.raw_finger_count = count_fingers(
             hand_landmarks, handedness_label, frame_width, frame_height)
-
-        wrist_x = int(
-            hand_landmarks.landmark[
-                mp.solutions.hands.HandLandmark.WRIST
-            ].x
-            * frame_width
-        )
-        if self._last_wrist_x is not None:
-            raw_vel = wrist_x - self._last_wrist_x
-            self.ema_velocity = (
-                self.cfg.ema_alpha * raw_vel
-                + (1 - self.cfg.ema_alpha) * self.ema_velocity
-            )
-        else:
+        lm = hand_landmarks.landmark
+        sample = (current_time, lm[0].x, lm[0].y * frame_height / frame_width)
+        previous = self._last_sample if self._tracked else None
+        self._tracked = True
+        self.tracking_held = False
+        self._last_seen = current_time
+        self._last_sample = sample
+        if previous is None:
+            # After a dropout keep the selection briefly, but do not mistake
+            # the unobserved jump to a re-detected wrist for a swipe.
             self.ema_velocity = 0.0
-        self._last_wrist_x = wrist_x
+            self._clear_stroke()
+            self._candidate_since = None
+            self._settle_selection(current_time)
+        else:
+            dt = current_time - previous[0]
+            raw_velocity = (sample[1] - previous[1]) / dt
+            alpha = -math.expm1(-dt / self.cfg.velocity_smoothing_s)
+            self.ema_velocity += alpha * (raw_velocity - self.ema_velocity)
+            sign = (1 if self.ema_velocity > self.cfg.motion_release_speed else
+                    -1 if self.ema_velocity < -self.cfg.motion_release_speed else 0)
+            if sign:
+                self._still_since = None
+                if sign != self._stroke_sign:
+                    self._clear_stroke()
+                    self._stroke_sign = sign
+                    self._stroke_target = self.finger_count
+                    self._motion.append(previous)
+                self._motion.append(sample)
+                while len(self._motion) > 1 and current_time - self._motion[0][0] > self.cfg.swipe_window_s:
+                    self._motion.popleft()
+            else:
+                if self._still_since is None:
+                    self._still_since = current_time
+                if current_time - self._still_since >= self.cfg.motion_release_s:
+                    self._clear_stroke()
+                if not self._stroke_sign:
+                    self._settle_selection(current_time)
 
         # Pinch volume: distance between thumb tip (4) and index tip (8)
         lm = hand_landmarks.landmark
@@ -393,10 +453,16 @@ class GestureEngine:
 
         return self.finger_count, self.ema_velocity
 
-    def hand_lost(self):
-        self._last_wrist_x = None
+    def hand_lost(self, current_time: float):
+        self._tracked = False
+        self.raw_finger_count = 0
         self.ema_velocity = 0.0
-        self.finger_count = 0
+        self._candidate_since = None
+        self._clear_stroke()
+        if self._last_seen is None or current_time - self._last_seen > self.cfg.tracking_grace_s:
+            self._reset_hand()
+        else:
+            self.tracking_held = self.finger_count > 0
 
     def cooldown_ok(self, current_time: float) -> bool:
         return current_time - self._action_ts > self.cfg.action_cooldown
@@ -408,20 +474,28 @@ class GestureEngine:
         """
         Return "right" / "left" when a swipe fires on this frame, else None.
 
-        A swipe needs at least one extended finger, |EMA velocity| above the
-        threshold, and the cooldown to have elapsed.  Every swipe that fires
-        restarts the cooldown, whether or not it changes a loop, so the same
-        motion cannot fire twice.
+        A settled target stays fixed through a stroke even if finger landmarks
+        flicker. Require observed horizontal travel, speed and several samples.
+        Emit once per stroke; a missing hand can never emit a command.
         """
-        if self.finger_count <= 0 or not self.cooldown_ok(current_time):
+        if (not self._tracked or self._stroke_target <= 0 or self._stroke_fired
+                or not self.cooldown_ok(current_time) or len(self._motion) < 3):
             return None
-        thr = self.cfg.swipe_velocity_threshold
-        if self.ema_velocity > thr:
-            direction = "right"
-        elif self.ema_velocity < -thr:
-            direction = "left"
-        else:
+        first, last = self._motion[0], self._motion[-1]
+        dx, dy = last[1] - first[1], last[2] - first[2]
+        steps = [b[1] - a[1] for a, b in zip(self._motion, list(self._motion)[1:])]
+        travel = sum(abs(step) for step in steps)
+        if (last[0] - first[0] < self.cfg.swipe_min_duration_s
+                or abs(dx) < self.cfg.swipe_min_distance
+                or abs(self.ema_velocity) < self.cfg.swipe_velocity_threshold
+                or dx * self._stroke_sign <= 0
+                or abs(dx) < 1.3 * abs(dy)
+                or abs(dx) < 0.8 * travel
+                or sum(step * self._stroke_sign > 0.002 for step in steps) < 2):
             return None
+        direction = "right" if dx > 0 else "left"
+        self.swipe_fingers = self._stroke_target
+        self._stroke_fired = True
         self.record_action(current_time)
         return direction
 
@@ -592,15 +666,23 @@ class Renderer:
 
     # ------------------------------------------------------------------
     def draw_target_indicator(
-        self, canvas: np.ndarray, finger_count: int, fw: int
+        self, canvas: np.ndarray, finger_count: int, fw: int,
+        tracking_held: bool = False,
     ) -> None:
         if finger_count <= 0:
+            cv2.putText(canvas, "Hold 1-5 fingers still to select a loop",
+                        (max(12, fw // 2 - 230), 50), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.65, (210, 210, 210), 2)
             return
         text  = f"TARGET: LOOP {finger_count}"
         color = LOOP_COLORS[finger_count - 1]
         (tw, _), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_DUPLEX, 1.0, 2)
         cv2.putText(canvas, text, ((fw - tw) // 2, 50),
                     cv2.FONT_HERSHEY_DUPLEX, 1.0, color, 2)
+        hint = "Tracking briefly lost - selection held" if tracking_held else "Swipe right to start / left to stop"
+        (hw, _), _ = cv2.getTextSize(hint, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 1)
+        cv2.putText(canvas, hint, ((fw - hw) // 2, 75),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, (210, 210, 210), 1)
 
     def draw_fps(self, canvas: np.ndarray, fps: float) -> None:
         cv2.putText(canvas, f"FPS: {fps:.0f}", (14, 30),
@@ -960,7 +1042,9 @@ class GestureMusicController:
         """Update gesture state and loops.  Returns a summary for the log."""
         info: dict = {"hand": False}
         if not hand_results.multi_hand_landmarks:
-            self.gesture.hand_lost()
+            self.gesture.hand_lost(now)
+            info.update(fingers=self.gesture.finger_count, raw_fingers=0,
+                        tracking_held=self.gesture.tracking_held)
             return info
 
         hand_lm = hand_results.multi_hand_landmarks[0]
@@ -969,15 +1053,18 @@ class GestureMusicController:
             label = hand_results.multi_handedness[0].classification[0].label
 
         finger_count, velocity = self.gesture.update_hand(
-            hand_lm, label, fw, fh or self.cfg.frame_height)
+            hand_lm, label, fw, now, fh or self.cfg.frame_height)
         self.audio.set_volume(self.gesture.pinch_volume)
         info.update(hand=True, handedness=label, fingers=finger_count,
-                    vel=round(velocity, 2))
+                    raw_fingers=self.gesture.raw_finger_count,
+                    tracking_held=False, vel=round(velocity, 4))
 
         swipe = self.gesture.detect_swipe(now)
         if swipe is None:
             return info
         info["swipe"] = swipe
+        finger_count = self.gesture.swipe_fingers
+        info["fingers"] = finger_count
         idx = finger_count - 1
 
         if swipe == "right" and self.loop_states[idx]["status"] == "inactive":
@@ -1131,7 +1218,7 @@ class GestureMusicController:
                             self.renderer.draw_face_mesh(canvas, fl, fw, fh)
 
                 self.renderer.draw_target_indicator(
-                    canvas, self.gesture.finger_count, fw
+                    canvas, self.gesture.finger_count, fw, self.gesture.tracking_held
                 )
 
                 active_anims  = self.anim.tick(now)
@@ -1193,8 +1280,9 @@ def _parse_args() -> argparse.Namespace:
                    help="Capture height (default: 720)")
     p.add_argument("--demo",            action="store_true",
                    help="Disable audio — no .wav files required")
-    p.add_argument("--swipe-threshold", type=int, default=45,  metavar="PX",
-                   help="Swipe velocity threshold in px/frame (default: 45)")
+    p.add_argument("--swipe-threshold", type=float, default=0.35, metavar="WIDTHS_PER_S",
+                   help="Swipe speed in frame widths/second (default: 0.35; "
+                        "R1 replaces the old px/frame units)")
     p.add_argument("--record",          type=Path, metavar="FILE",
                    help="Save raw camera frames to FILE (.mp4 or .avi) "
                         "plus a .frames.csv of capture times")
@@ -1215,8 +1303,16 @@ def run_header(cfg: Config, source_kind: str, input_path: Optional[Path]) -> dic
         "input": str(input_path) if input_path else None,
         "started": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "swipe_velocity_threshold": cfg.swipe_velocity_threshold,
+        "velocity_units": "frame_widths_per_second",
+        "swipe_min_distance": cfg.swipe_min_distance,
+        "swipe_window_s": cfg.swipe_window_s,
+        "swipe_min_duration_s": cfg.swipe_min_duration_s,
+        "velocity_smoothing_s": cfg.velocity_smoothing_s,
+        "selection_settle_s": cfg.selection_settle_s,
+        "tracking_grace_s": cfg.tracking_grace_s,
+        "motion_release_speed": cfg.motion_release_speed,
+        "motion_release_s": cfg.motion_release_s,
         "action_cooldown": cfg.action_cooldown,
-        "ema_alpha": cfg.ema_alpha,
         "mediapipe": mp.__version__,
         "opencv": cv2.__version__,
     }
@@ -1224,6 +1320,8 @@ def run_header(cfg: Config, source_kind: str, input_path: Optional[Path]) -> dic
 
 if __name__ == "__main__":
     args = _parse_args()
+    if not math.isfinite(args.swipe_threshold) or args.swipe_threshold <= 0:
+        sys.exit("--swipe-threshold must be a positive speed in frame widths/second.")
     cfg  = Config(
         camera_index             = args.camera,
         frame_width              = args.width,
