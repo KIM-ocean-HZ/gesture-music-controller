@@ -235,7 +235,11 @@ def cmd_replay(args):
     for r in rows:
         clip = (args.manifest.parent / r["clip"]).resolve()
         log_path = out_dir / "logs" / (Path(r["clip"]).stem + ".jsonl")
-        cfg = app.Config()
+        # The set the clip was performed with sets the loop lengths, and so
+        # which swipes change a loop (only those start the cooldown).
+        sound_set = (r.get("sound_set") or "").strip() or "HousePiano"
+        cfg = (app.Config(sound_set=sound_set)
+               if "sound_set" in app.Config.__dataclass_fields__ else app.Config())
         frame_log = app.FrameLog(log_path, app.run_header(cfg, "replay", clip))
         app.GestureMusicController(
             cfg, demo_mode=True, source=app.VideoFileSource(clip),
@@ -243,7 +247,8 @@ def cmd_replay(args):
         ).run()
         _, frames = read_log(log_path)
         m = clip_metrics(frames, r["kind"], r["expected"], r["absent"])
-        m.update(clip=r["clip"], condition=r.get("condition", "").strip() or "-")
+        m.update(clip=r["clip"], condition=r.get("condition", "").strip() or "-",
+                 sound_set=getattr(cfg, "sound_set", None))
         clips.append(m)
         print(f"  {r['clip']}: {m['frames']} frames, "
               f"{m['lost_frames']} lost, {m['swipes']} swipes", file=sys.stderr)

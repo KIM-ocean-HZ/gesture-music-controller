@@ -41,6 +41,7 @@ import math
 import random
 import sys
 import time
+import wave
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -121,6 +122,7 @@ class Config:
     })
     startup_sound: str = "startup.wav"
     confirm_sound: str = "confirm.wav"
+    sound_set: str = "HousePiano"        # set at start; p / g / f switch it live
 
 
 # ---------------------------------------------------------------------------
@@ -331,8 +333,19 @@ class AudioEngine:
                     s.set_volume(self.master_volume)
 
     def loop_length(self, idx: int) -> float:
-        """Return audio duration in seconds; fall back to 8 s if unavailable."""
+        """Return audio duration in seconds; fall back to 8 s if unavailable.
+
+        Demo runs and replays read it from the WAV header, so their loop
+        boundaries (and hence which swipes change a loop) match the live app.
+        """
         if self.demo_mode:
+            files = self.cfg.sound_sets.get(self._active_set, [])
+            if idx < len(files):
+                try:
+                    with wave.open(str(ASSETS_DIR / files[idx])) as w:
+                        return w.getnframes() / w.getframerate()
+                except (OSError, EOFError, wave.Error):
+                    pass
             return 8.0
         sounds = self.current_sounds
         if idx < len(sounds) and sounds[idx]:
@@ -1074,8 +1087,8 @@ class GestureMusicController:
         self.master_length: float = 0.0
 
         # Active sound set
-        self._set_idx: int = 0
-        self.audio.set_sound_set(self._SET_NAMES[0])
+        self._set_idx: int = self._SET_NAMES.index(cfg.sound_set)
+        self.audio.set_sound_set(cfg.sound_set)
 
         # FPS tracking
         self._frame_times: deque = deque(maxlen=cfg.fps_smoothing)
@@ -1424,6 +1437,9 @@ def _parse_args() -> argparse.Namespace:
                    help="Capture height (default: 720)")
     p.add_argument("--demo",            action="store_true",
                    help="Disable audio — no .wav files required")
+    p.add_argument("--sound-set", choices=list(Config().sound_sets), default="HousePiano",
+                   help="Sound set at start (default: HousePiano). For --input, the set "
+                        "the clip was performed with, so loop lengths match.")
     p.add_argument("--swipe-threshold", type=float, default=0.35, metavar="WIDTHS_PER_S",
                    help="Swipe speed in frame widths/second (default: 0.35; "
                         "R1 replaces the old px/frame units)")
@@ -1460,6 +1476,7 @@ def run_header(cfg: Config, source_kind: str, input_path: Optional[Path]) -> dic
         "motion_release_speed": cfg.motion_release_speed,
         "motion_release_s": cfg.motion_release_s,
         "action_cooldown": cfg.action_cooldown,
+        "sound_set": cfg.sound_set,
         "volume_mode": "explicit_v_toggle",
         "volume_settle_s": cfg.volume_settle_s,
         "volume_spread_range": cfg.volume_spread_range,
@@ -1479,6 +1496,7 @@ if __name__ == "__main__":
         frame_width              = args.width,
         frame_height             = args.height,
         swipe_velocity_threshold = args.swipe_threshold,
+        sound_set                = args.sound_set,
     )
     if args.input and args.record:
         sys.exit("--record needs the live camera; it cannot be used with --input.")
