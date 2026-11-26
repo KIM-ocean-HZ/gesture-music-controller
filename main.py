@@ -187,11 +187,17 @@ def count_fingers(hand_landmarks, handedness_label: str = "",
         return size > 1e-12 and float(np.dot(u, v)) / size < math.cos(math.radians(degrees))
 
     palm_width = distance(5, 17)
-    if palm_width < 1e-6:
+    across = points[5, :2] - points[17, :2]          # little → index knuckle
+    palm_width_2d = float(np.linalg.norm(across))
+    if palm_width < 1e-6 or palm_width_2d < 1e-6:
         return 0
     # A tucked thumb can be straight too: require it to reach away from the
-    # little-finger knuckle, measured against this hand's own palm width.
-    thumb = straight(2, 3, 4, 135) and distance(4, 17) > 1.25 * palm_width
+    # little-finger knuckle, measured against this hand's own palm width, and
+    # to stick out sideways past the index knuckle by > 0.6 palm widths. A
+    # thumb folded beside or behind the palm (back-of-hand "4") is straight
+    # and far enough from the little finger, but does not stick out sideways.
+    thumb = (straight(2, 3, 4, 135) and distance(4, 17) > 1.25 * palm_width
+             and float(np.dot(points[4, :2] - points[5, :2], across)) > 0.6 * palm_width_2d ** 2)
     # For the four fingers retain the visible tip-past-knuckle rule, but
     # measure it along the palm's own axis instead of screen-up. Requiring
     # perfectly straight 3-D joints rejects naturally relaxed raised fingers;
@@ -200,7 +206,6 @@ def count_fingers(hand_landmarks, handedness_label: str = "",
     axis_length = float(np.linalg.norm(axis))
     if axis_length < 1e-6:
         return int(thumb)
-    palm_width_2d = float(np.linalg.norm(points[5, :2] - points[17, :2]))
     margin = 0.04 * palm_width_2d
     axis /= axis_length
     fingers = sum(float(np.dot(points[mcp + 3, :2] - points[mcp + 1, :2], axis)) > margin
