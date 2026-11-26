@@ -27,10 +27,13 @@ multiple moving samples, and the cooldown to have elapsed. A stroke emits at
 most once. Every emitted swipe is counted, whether or not it changed a loop.
 
 Since 2026-11-26 the 0.8 s cooldown starts only after a swipe that started,
-queued or stopped a loop, so a no-op swipe (such as a wind-up in the opposite
-direction) does not block the swipe that follows. Counts can therefore depend
-on which loops were playing. The original baseline used the instantaneous
-finger count, a 45 px/frame threshold and a cooldown after every swipe.
+queued, stopped or cancelled a loop, so a no-op swipe (such as a wind-up in the
+opposite direction) does not block the swipe that follows. A stroke that began
+during the cooldown never fires, however long it lasts. A left swipe on a
+queued loop cancels its start; a right swipe on a stopping loop keeps it
+playing. Counts can therefore depend on which loops were playing. The original
+baseline used the instantaneous finger count, a 45 px/frame threshold and a
+cooldown after every swipe.
 
 Scripted clips are scored by aligning the intended sequence with the detected
 one (edit distance). Timing is not checked, only order.
