@@ -463,10 +463,15 @@ class GestureEngine:
         self._clear_stroke()
 
     def _settle_selection(self, now):
+        """Track how long the raw count has held on every frame; show it as the
+        target once it has held selection_settle_s while the hand is slower
+        than a swipe. The hand need not be still, so a new number shows up
+        while the hand drifts or returns after a swipe."""
         if self.raw_finger_count != self._candidate_count or self._candidate_since is None:
             self._candidate_count = self.raw_finger_count
             self._candidate_since = now
-        if now - self._candidate_since >= self.cfg.selection_settle_s:
+        if (abs(self.ema_velocity) < self.cfg.swipe_velocity_threshold
+                and now - self._candidate_since >= self.cfg.selection_settle_s):
             self.finger_count = self._candidate_count
 
     def update_hand(
@@ -502,7 +507,6 @@ class GestureEngine:
             self.ema_velocity = 0.0
             self._clear_stroke()
             self._candidate_since = None
-            self._settle_selection(current_time)
         else:
             dt = current_time - previous[0]
             raw_velocity = (sample[1] - previous[1]) / dt
@@ -515,7 +519,6 @@ class GestureEngine:
                 if sign != self._stroke_sign:
                     self._clear_stroke()
                     self._stroke_sign = sign
-                    self._stroke_target = self.finger_count
                     self._motion.append(previous)
                 self._motion.append(sample)
                 while len(self._motion) > 1 and current_time - self._motion[0][0] > self.cfg.swipe_window_s:
@@ -525,9 +528,13 @@ class GestureEngine:
                     self._still_since = current_time
                 if current_time - self._still_since >= self.cfg.motion_release_s:
                     self._clear_stroke()
-                if not self._stroke_sign:
-                    self._settle_selection(current_time)
 
+        self._settle_selection(current_time)
+        # Latch the target when the stroke reaches swipe speed: the selection
+        # is current up to that point, and fast-motion counts cannot change it.
+        if (self._stroke_sign and not self._stroke_target
+                and abs(self.ema_velocity) >= self.cfg.swipe_velocity_threshold):
+            self._stroke_target = self.finger_count
         return self.finger_count, self.ema_velocity
 
     def hand_lost(self, current_time: float):
@@ -757,7 +764,7 @@ class Renderer:
                             cv2.FONT_HERSHEY_SIMPLEX, scale, (100, 230, 230), 2)
             return
         if finger_count <= 0:
-            cv2.putText(canvas, "Hold 1-5 fingers still to select a loop",
+            cv2.putText(canvas, "Hold up 1-5 fingers to select a loop",
                         (max(12, fw // 2 - 230), 50), cv2.FONT_HERSHEY_SIMPLEX,
                         0.65, (210, 210, 210), 2)
             cv2.putText(canvas, "V: adjust / lock volume",
