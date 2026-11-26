@@ -60,7 +60,9 @@ one (edit distance). Timing is not checked, only order.
 ## Recording protocol
 
 Keep the laptop, camera, its position and the resolution (default 1280×720)
-the same for every session. Record in demo mode; sound is not needed.
+the same for every session. Demo mode is fine; sound is not needed. Use one
+sound set per measured clip (start it with `--sound-set`) and do not switch
+sets during the clip.
 
 ```bash
 python main.py --demo --record recordings/s1-normal-idle.mp4    # press q to stop
@@ -98,7 +100,13 @@ Record the full set in at least three separate sessions (different days or
 times of day). Name clips `s<N>-<condition>-<kind>.mp4`.
 
 **Manifest** — copy `bench/clips.example.csv` to `recordings/clips.csv` and
-list every clip: `clip,condition,kind,expected,absent,notes`.
+list every clip: `clip,condition,kind,expected,absent,sound_set,notes`.
+`sound_set` is the set the clip was performed with (default HousePiano).
+Replays read loop lengths from `assets/` (8 s if a file is missing). Only
+swipes that change a loop start the cooldown, so loop boundaries decide which
+swipes fire, and a replay with the wrong lengths diverges from the live run.
+Key presses (set switches, `v`, visual mode) are not in the clip and are not
+replayed.
 
 Once the baseline is measured, do not edit or delete clips. If you add clips,
 re-run the baseline commit on the enlarged set before comparing.

@@ -201,6 +201,35 @@ class SwipeTest(unittest.TestCase):
         self.assertEqual(self.g.finger_count, 5)
 
 
+class SoundSetTest(unittest.TestCase):
+    def test_demo_mode_reads_loop_length_from_the_wav_header(self):
+        import tempfile
+        import wave
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            with wave.open(str(Path(tmp) / "loop2.wav"), "wb") as w:
+                w.setnchannels(2)
+                w.setsampwidth(2)
+                w.setframerate(44100)
+                w.writeframes(b"\0" * 4 * 44100 * 4)          # 4.0 s
+            with mock.patch.object(app, "ASSETS_DIR", Path(tmp)):
+                audio = app.AudioEngine(app.Config(), demo_mode=True)
+                audio.set_sound_set("HousePiano")
+                self.assertAlmostEqual(audio.loop_length(1), 4.0)
+                self.assertEqual(audio.loop_length(0), 8.0)  # loop1.wav missing
+
+    def test_controller_starts_in_the_configured_set(self):
+        c = app.GestureMusicController(app.Config(sound_set="FunkGuitar"), demo_mode=True,
+                                       source=SimpleNamespace(release=lambda: None),
+                                       headless=True)
+        try:
+            self.assertEqual(c._SET_NAMES[c._set_idx], "FunkGuitar")
+            self.assertEqual(c.audio._active_set, "FunkGuitar")
+        finally:
+            c._mp_hands.close()
+            c._mp_face.close()
+
+
 def controller():
     """A controller without camera, window or audio, for gesture → loop tests."""
     c = object.__new__(app.GestureMusicController)

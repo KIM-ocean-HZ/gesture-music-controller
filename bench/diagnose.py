@@ -29,6 +29,9 @@ def main():
                         default=Path(__file__).resolve().parent.parent)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--clip", type=Path, nargs="+", required=True)
+    parser.add_argument("--sound-set", default="HousePiano",
+                        help="set the clips were performed with (ignored by main.py "
+                             "versions without Config.sound_set)")
     args = parser.parse_args()
     if args.out.exists():
         parser.error(f"refusing to overwrite evidence: {args.out}")
@@ -66,7 +69,9 @@ def main():
         video_source = app.VideoFileSource(path)
         width = int(video_source.cap.get(app.cv2.CAP_PROP_FRAME_WIDTH))
         height = int(video_source.cap.get(app.cv2.CAP_PROP_FRAME_HEIGHT))
-        cfg = app.Config(frame_width=width, frame_height=height)
+        extra = ({"sound_set": args.sound_set}
+                 if "sound_set" in app.Config.__dataclass_fields__ else {})
+        cfg = app.Config(frame_width=width, frame_height=height, **extra)
         log_path = args.out / "logs" / (path.stem + ".jsonl")
         log = app.FrameLog(log_path, app.run_header(cfg, "replay", path))
         DiagnosticController(cfg, demo_mode=True, source=video_source,
@@ -84,6 +89,7 @@ def main():
             "clip": path.name, "sha256": sha256(path),
             "timestamps_sha256": sha256(sidecar),
             "resolution": [width, height], "frames": len(frames),
+            "sound_set": extra.get("sound_set"),
             "capture_span_s": frames[-1]["t"] - start,
             "frames_without_detection": sum(not r["hand"] for r in frames),
             "detected_finger_histogram": dict(Counter(r["fingers"] for r in frames if r["hand"])),
