@@ -171,7 +171,9 @@ def software_latency(frames: List[dict]) -> List[float]:
         if f.get("action") != "start":
             continue
         loop = f["fingers"]
-        for g in frames[k + 1:]:
+        # From the triggering frame itself: since 2026-11-26 the loop is
+        # played in that frame; older logs play it on a later frame.
+        for g in frames[k:]:
             if loop in g.get("played", []):
                 p = g["perf_play"][g["played"].index(loop)]
                 out.append((p - f["perf_read"]) * 1000)

@@ -222,10 +222,11 @@ class ControllerSwipeTest(unittest.TestCase):
         self.events = []
 
     def frame(self, t, x):
-        self.c._process_queues(t)
+        # Same order as run(): gesture first, then due starts/stops.
         result = SimpleNamespace(multi_hand_landmarks=[hand(self.one, x=x, y=0.65)],
                                  multi_handedness=[])
         info = self.c._handle_gesture(result, 1280, t, 720)
+        self.c._process_queues(t)
         if "swipe" in info:
             self.events.append((info["swipe"], info["fingers"], info.get("action")))
 
