@@ -446,6 +446,7 @@ class GestureEngine:
         self._motion: deque = deque()
         self._stroke_target = 0
         self._stroke_sign = 0
+        self._stroke_start = math.inf
         self._stroke_fired = False
         self._still_since: Optional[float] = None
 
@@ -519,6 +520,7 @@ class GestureEngine:
                 if sign != self._stroke_sign:
                     self._clear_stroke()
                     self._stroke_sign = sign
+                    self._stroke_start = previous[0]
                     self._motion.append(previous)
                 self._motion.append(sample)
                 while len(self._motion) > 1 and current_time - self._motion[0][0] > self.cfg.swipe_window_s:
@@ -563,10 +565,12 @@ class GestureEngine:
         Emit once per stroke; a missing hand can never emit a command. The
         caller starts the cooldown only when the swipe changed a loop, so a
         wind-up in the opposite direction (always a no-op for the intended
-        loop) does not block the swipe that follows it.
+        loop) does not block the swipe that follows it. A stroke that began
+        during the cooldown never fires, however long it lasts: that is the
+        hand swinging back after a command, not a new swipe.
         """
         if (not self._tracked or self._stroke_target <= 0 or self._stroke_fired
-                or not self.cooldown_ok(current_time) or len(self._motion) < 3):
+                or not self.cooldown_ok(self._stroke_start) or len(self._motion) < 3):
             return None
         first, last = self._motion[0], self._motion[-1]
         dx, dy = last[1] - first[1], last[2] - first[2]
@@ -1212,6 +1216,25 @@ class GestureMusicController:
                 color=LOOP_COLORS[idx],
                 priority=self._action_priority(idx, "stopping"),
             )
+
+        # Change of mind before the boundary: left cancels a queued start,
+        # right keeps a loop that was going to stop.
+        elif swipe == "left" and self.loop_states[idx]["status"] == "queued":
+            self.quant_queue = [q for q in self.quant_queue if q["index"] != idx]
+            self.loop_states[idx]["status"] = "inactive"
+            info["action"] = "cancel_start"
+            self.anim.add("integrated_hud", now=now, text=f"LOOP {idx + 1} CANCELLED",
+                          direction="left", color=LOOP_COLORS[idx],
+                          priority=self._action_priority(idx, "queued"))
+
+        elif swipe == "right" and self.loop_states[idx]["status"] == "stopping":
+            self.stop_queue = [q for q in self.stop_queue if q["index"] != idx]
+            self.loop_states[idx]["status"] = "locked"
+            info["action"] = "cancel_stop"
+            self.anim.add("integrated_hud", now=now, text=f"LOOP {idx + 1} KEEPS PLAYING",
+                          direction="right", color=LOOP_COLORS[idx],
+                          priority=self._action_priority(idx, "queued"))
+
         if "action" in info:
             # Only a swipe that changed a loop starts the cooldown; it blocks
             # the return stroke. A no-op swipe (e.g. a wind-up) does not.

@@ -229,6 +229,51 @@ class ControllerSwipeTest(unittest.TestCase):
         if "swipe" in info:
             self.events.append((info["swipe"], info["fingers"], info.get("action")))
 
+    def stroke(self, t, x, direction, frames=11, speed=0.7):
+        for i in range(1, frames + 1):
+            self.frame(t + i / 30, x + direction * speed * i / 30)
+        return t + frames / 30, x + direction * speed * frames / 30
+
+    def rest(self, t, x, seconds):
+        for i in range(1, round(seconds * 30) + 1):
+            self.frame(t + i / 30, x)
+        return t + round(seconds * 30) / 30
+
+    def loop_two_playing(self):
+        """Master clock running (8 s loops) with loop 2 playing."""
+        self.c.master_clock, self.c.master_length = 0.0, 8.0
+        self.c.loop_states[1]["status"] = "locked"
+
+    def test_left_swipe_cancels_a_queued_loop(self):
+        self.loop_two_playing()
+        t = self.rest(0, 0.4, 0.5)
+        t, x = self.stroke(t, 0.4, +1)            # R1: queued for t = 8 s
+        t = self.rest(t, x, 0.8)
+        t, x = self.stroke(t, x, -1)              # L1 before the boundary
+        self.rest(8.0, x, 0.3)
+        self.assertEqual(self.events, [("right", 1, "queue"), ("left", 1, "cancel_start")])
+        self.assertEqual(self.c.loop_states[0]["status"], "inactive")
+        self.assertEqual(self.c.quant_queue, [])
+
+    def test_right_swipe_keeps_a_stopping_loop(self):
+        self.loop_two_playing()
+        self.c.loop_states[0]["status"] = "locked"
+        t = self.rest(0, 0.6, 0.5)
+        t, x = self.stroke(t, 0.6, -1)            # L1: stops at t = 8 s
+        t = self.rest(t, x, 0.8)
+        t, x = self.stroke(t, x, +1)              # R1 before the boundary
+        self.rest(8.0, x, 0.3)
+        self.assertEqual(self.events, [("left", 1, "stop"), ("right", 1, "cancel_stop")])
+        self.assertEqual(self.c.loop_states[0]["status"], "locked")
+        self.assertEqual(self.c.stop_queue, [])
+
+    def test_return_stroke_that_outlasts_the_cooldown_does_not_fire(self):
+        t = self.rest(-1 / 30, 0.4, 0.5)
+        t, x = self.stroke(t, 0.4, +1)            # start from silence
+        self.stroke(t, x, -1, frames=36, speed=0.4)  # 1.2 s swing back
+        self.assertEqual(self.events, [("right", 1, "start")])
+        self.assertEqual(self.c.loop_states[0]["status"], "locked")
+
     def test_wind_up_before_a_swipe_does_not_block_it(self):
         for i in range(16):
             self.frame(i / 30, 0.4)
