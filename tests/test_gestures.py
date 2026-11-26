@@ -1,4 +1,4 @@
-"""R1 regressions: finger counts on reviewed palm/back poses."""
+"""R1 regressions: visible finger poses and timestamped wrist trajectories."""
 
 import copy
 import json
@@ -52,6 +52,128 @@ class FingerCountTest(unittest.TestCase):
         self.assertEqual(app.count_fingers(lm), 0)
         lm.landmark[4].x = float("nan")
         self.assertEqual(app.count_fingers(lm), 0)
+
+
+class SwipeTest(unittest.TestCase):
+    def setUp(self):
+        self.g = app.GestureEngine(app.Config())
+        self.one = next(p for p in POSES if p["expected"] == 1)
+        self.five = next(p for p in POSES if p["expected"] == 5)
+        self.events = []
+
+    def feed(self, t, x, pose=None, y=0.65, width=1280, height=720):
+        self.g.update_hand(hand(pose or self.one, x=x, y=y), "Right", width, t, height)
+        event = self.g.detect_swipe(t)
+        if event:
+            self.events.append((event, self.g.swipe_fingers))
+
+    def ready(self, fps=30, pose=None, x=0.4):
+        for i in range(round(0.5 * fps) + 1):
+            self.feed(i / fps, x, pose=pose)
+        self.assertGreater(self.g.finger_count, 0)
+        return i / fps
+
+    def test_both_directions_at_multiple_frame_rates_and_resolutions(self):
+        for fps in (15, 30, 60):
+            for width, height in ((640, 360), (1280, 720), (1920, 1080)):
+                for sign in (-1, 1):
+                    with self.subTest(fps=fps, width=width, direction=sign):
+                        self.g = app.GestureEngine(app.Config())
+                        self.events = []
+                        start = self.ready(fps=fps)
+                        for i in range(1, round(0.35 * fps) + 1):
+                            self.feed(start + i / fps, 0.4 + sign * 0.7 * i / fps,
+                                      width=width, height=height)
+                        self.assertEqual(self.events, [("right" if sign > 0 else "left", 1)])
+
+    def test_raw_count_flicker_during_stroke_does_not_change_selected_loop(self):
+        self.ready()
+        for i in range(1, 12):
+            self.feed(0.5 + i / 30, 0.4 + 0.7 * i / 30, pose=self.five)
+        self.assertEqual(self.g.raw_finger_count, 5)
+        self.assertEqual(self.events, [("right", 1)])
+
+    def test_zero_finger_frame_during_stroke_keeps_selected_loop(self):
+        self.ready()
+        collapsed = copy.deepcopy(self.one)
+        collapsed["landmarks"][4] = collapsed["landmarks"][17][:]
+        for mcp in (5, 9, 13, 17):
+            collapsed["landmarks"][mcp + 3] = collapsed["landmarks"][mcp + 1][:]
+        for i in range(1, 12):
+            self.feed(0.5 + i / 30, 0.4 + 0.7 * i / 30, pose=collapsed)
+        self.assertEqual(self.g.raw_finger_count, 0)
+        self.assertEqual(self.events, [("right", 1)])
+
+    def test_short_tracking_gap_holds_selection_but_cannot_emit(self):
+        self.ready()
+        self.g.hand_lost(0.6)
+        self.assertEqual(self.g.finger_count, 1)
+        self.assertTrue(self.g.tracking_held)
+        self.assertIsNone(self.g.detect_swipe(0.6))
+        # Reappearing elsewhere must not invent a swipe across the gap.
+        self.feed(0.65, 0.8, pose=self.five)
+        self.assertEqual(self.events, [])
+        self.assertEqual(self.g.finger_count, 1)
+        for i in range(1, 10):
+            self.feed(0.65 + i / 30, 0.8 - 0.7 * i / 30, pose=self.five)
+        self.assertEqual(self.events, [("left", 1)])
+
+    def test_long_loss_clears_selection_and_motion(self):
+        self.ready()
+        self.g.hand_lost(0.8)
+        self.assertEqual(self.g.finger_count, 0)
+        self.feed(0.85, 0.8)
+        self.assertEqual(self.events, [])
+        self.assertEqual(self.g.finger_count, 0)
+
+    def test_gap_between_processed_frames_and_clock_reversal_reset(self):
+        self.ready()
+        self.feed(1.0, 0.9)
+        self.assertEqual(self.g.finger_count, 0)
+        self.assertEqual(self.events, [])
+        self.feed(0.9, 0.1)
+        self.assertEqual(self.events, [])
+
+    def test_idle_jitter_slow_drift_and_vertical_motion_do_not_fire(self):
+        for kind in ("jitter", "slow", "vertical"):
+            self.g = app.GestureEngine(app.Config())
+            self.events = []
+            self.ready()
+            for i in range(1, 61):
+                dt = i / 30
+                x = 0.4 + (0.004 * math.sin(i) if kind == "jitter" else 0.1 * dt)
+                y = 0.65 - (0.5 * dt if kind == "vertical" else 0)
+                self.feed(0.5 + dt, x, y=y)
+            self.assertEqual(self.events, [], kind)
+
+    def test_single_landmark_jump_does_not_fire(self):
+        self.ready()
+        for i in range(1, 15):
+            self.feed(0.5 + i / 30, 0.75)
+        self.assertEqual(self.events, [])
+
+    def test_sustained_stroke_only_fires_once_even_after_cooldown(self):
+        self.ready(x=0.1)
+        for i in range(1, 46):
+            self.feed(0.5 + i / 30, 0.1 + 0.5 * i / 30)
+        self.assertEqual(self.events, [("right", 1)])
+
+    def test_new_selection_can_be_made_after_motion_stops(self):
+        self.ready()
+        for i in range(1, 31):
+            self.feed(0.5 + i / 30, 0.4, pose=self.five)
+        self.assertEqual(self.g.finger_count, 5)
+        for i in range(1, 12):
+            self.feed(1.5 + i / 30, 0.4 + 0.7 * i / 30, pose=self.five)
+        self.assertEqual(self.events, [("right", 5)])
+
+    def test_cooldown_applies_even_if_a_swipe_has_no_audio_action(self):
+        self.ready()
+        for i in range(1, 10):
+            self.feed(0.5 + i / 30, 0.4 + 0.7 * i / 30)
+        for i in range(1, 8):
+            self.feed(0.8 + i / 30, 0.61 - 0.7 * i / 30)
+        self.assertEqual(self.events, [("right", 1)])
 
 
 if __name__ == "__main__":

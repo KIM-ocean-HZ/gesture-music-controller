@@ -79,25 +79,6 @@ class LatencyTest(unittest.TestCase):
         self.assertEqual([round(x, 3) for x in bench.software_latency(log)], [40.0])
 
 
-class DetectSwipeTest(unittest.TestCase):
-    def setUp(self):
-        self.g = app.GestureEngine(app.Config())
-
-    def test_needs_fingers_and_velocity(self):
-        self.g.finger_count, self.g.ema_velocity = 0, 100
-        self.assertIsNone(self.g.detect_swipe(10.0))
-        self.g.finger_count, self.g.ema_velocity = 2, 10
-        self.assertIsNone(self.g.detect_swipe(10.0))
-        self.g.ema_velocity = -100
-        self.assertEqual(self.g.detect_swipe(10.0), "left")
-
-    def test_cooldown_restarts_on_every_swipe(self):
-        self.g.finger_count, self.g.ema_velocity = 1, 100
-        self.assertEqual(self.g.detect_swipe(10.0), "right")
-        self.assertIsNone(self.g.detect_swipe(10.5))   # within 0.8 s
-        self.assertEqual(self.g.detect_swipe(10.9), "right")
-
-
 class ManifestTest(unittest.TestCase):
     def test_example_manifest_parses(self):
         rows = bench.read_manifest(REPO / "bench" / "clips.example.csv")
