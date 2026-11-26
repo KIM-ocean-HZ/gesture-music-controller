@@ -10,13 +10,14 @@ Controls
 Gesture (fingers shown)  1–5  →  target loop 1–5
 Swipe right              →  queue / start targeted loop on next beat
 Swipe left               →  stop targeted loop on next beat
-Pinch (thumb + index)    →  adjust master volume (spread = louder)
+V, then pinch           →  adjust volume; V again locks the current level
 
 Keyboard:
   1 / 2       Artistic / Reality visual mode
   p / g / f   HousePiano / BluesGuitar / FunkGuitar sound set
   s           Save screenshot
   h           Toggle help overlay
+  v           Toggle volume adjustment (locked by default)
   q           Quit
 
 Usage:
@@ -33,6 +34,7 @@ Measurement (see docs/MEASUREMENT.md):
 
 import argparse
 import csv
+import hashlib
 import json
 import logging
 import math
@@ -101,8 +103,10 @@ class Config:
 
     # Volume control via pinch gesture
     default_volume: float = 0.8
-    pinch_min_dist: float = 0.04         # normalised distance → vol = 0
-    pinch_max_dist: float = 0.22         # normalised distance → vol = 1
+    volume_settle_s: float = 0.15
+    volume_stability_tolerance: float = 0.08  # spread in palm widths
+    volume_spread_range: float = 1.5         # palm widths per full volume range
+    volume_motion_limit: float = 0.25        # image widths / second
 
     # UI
     dashboard_height: int = 120
@@ -337,6 +341,83 @@ class AudioEngine:
 
 
 # ---------------------------------------------------------------------------
+# Explicit volume control, separate from loop-selection gestures
+# ---------------------------------------------------------------------------
+class PinchVolumeControl:
+    """Relative pinch adjustment, enabled explicitly and committed when steady.
+
+    Selection/swiping cannot write volume while this mode is off. Reacquiring a
+    hand or entering the mode anchors to the current value, never to absolute
+    finger spacing. Fast withdrawal, edge clipping and loss discard a pending
+    adjustment instead of committing the last noisy frame.
+    """
+
+    def __init__(self, cfg: Config):
+        self.cfg = cfg
+        self.enabled = False
+        self.value = cfg.default_volume
+        self._reset_measurement()
+
+    def _reset_measurement(self):
+        self._anchor_spread = None
+        self._anchor_value = self.value
+        self._samples: deque = deque()
+        self._previous = None
+
+    def set_enabled(self, enabled: bool, current_volume: Optional[float] = None):
+        if current_volume is not None:
+            self.value = max(0.0, min(1.0, current_volume))
+        self.enabled = enabled
+        self._reset_measurement()
+
+    def hand_lost(self):
+        self.set_enabled(False)
+
+    def update(self, hand_landmarks, now: float, width: int, height: int) -> float:
+        if not self.enabled:
+            return self.value
+        lm = hand_landmarks.landmark
+        if any(not math.isfinite(p.x) or not math.isfinite(p.y)
+               or not (0.02 < p.x < 0.98 and 0.02 < p.y < 0.98) for p in lm):
+            self._reset_measurement()
+            return self.value
+        points = np.array([(p.x, p.y * height / width) for p in lm])
+        palm = float(np.linalg.norm(points[5] - points[17]))
+        if palm < 0.02:
+            self._reset_measurement()
+            return self.value
+        spread = float(np.linalg.norm(points[4] - points[8])) / palm
+        previous = self._previous
+        sample = (now, points[0], palm)
+        self._previous = sample
+        if previous is not None:
+            dt = now - previous[0]
+            if (dt <= 0 or dt > self.cfg.tracking_grace_s
+                    or float(np.linalg.norm(points[0] - previous[1])) / dt > self.cfg.volume_motion_limit
+                    or abs(palm - previous[2]) / (previous[2] * dt) > 1.2):
+                self._reset_measurement()
+                self._previous = sample
+                return self.value
+        if self._anchor_spread is None:
+            self._anchor_spread = spread
+            self._anchor_value = self.value
+        self._samples.append((now, spread))
+        # Retain the sample immediately before the dwell window as well, so
+        # irregular FPS does not make the required time span unreachable.
+        while len(self._samples) > 1 and now - self._samples[1][0] >= self.cfg.volume_settle_s:
+            self._samples.popleft()
+        spreads = [s for _, s in self._samples]
+        if (len(spreads) >= 3 and now - self._samples[0][0] >= self.cfg.volume_settle_s
+                and max(spreads) - min(spreads) <= self.cfg.volume_stability_tolerance):
+            settled_spread = float(np.median(spreads))
+            value = self._anchor_value + (settled_spread - self._anchor_spread) / self.cfg.volume_spread_range
+            self.value = max(0.0, min(1.0, value))
+            if value <= 0 or value >= 1:
+                self._anchor_value, self._anchor_spread = self.value, settled_spread
+        return self.value
+
+
+# ---------------------------------------------------------------------------
 # Gesture / state engine
 # ---------------------------------------------------------------------------
 class GestureEngine:
@@ -350,7 +431,6 @@ class GestureEngine:
     def __init__(self, cfg: Config):
         self.cfg = cfg
         self._action_ts: float = -math.inf
-        self.pinch_volume: float = cfg.default_volume
         self._reset_hand()
 
         # Head nod
@@ -442,14 +522,6 @@ class GestureEngine:
                     self._clear_stroke()
                 if not self._stroke_sign:
                     self._settle_selection(current_time)
-
-        # Pinch volume: distance between thumb tip (4) and index tip (8)
-        lm = hand_landmarks.landmark
-        pinch_d = dist_norm(lm[4], lm[8])
-        t = (pinch_d - self.cfg.pinch_min_dist) / (
-            self.cfg.pinch_max_dist - self.cfg.pinch_min_dist
-        )
-        self.pinch_volume = max(0.0, min(1.0, t))
 
         return self.finger_count, self.ema_velocity
 
@@ -576,12 +648,13 @@ class Renderer:
         ("  Show 1–5 fingers  target loop",   True),
         ("  Swipe RIGHT        queue loop",    True),
         ("  Swipe LEFT         stop loop",     True),
-        ("  Pinch thumb+index  volume",        True),
+        ("  V then pinch       adjust volume", True),
         ("",                                   True),
         ("KEYBOARD",                           False),
         ("  1 / 2   Artistic / Reality mode", True),
         ("  p / g / f   Piano / Guitar / Funk",True),
         ("  s  screenshot   h  help   q  quit",True),
+        ("  v  adjust / lock volume",          True),
     ]
 
     def __init__(self, cfg: Config):
@@ -668,18 +741,31 @@ class Renderer:
     def draw_target_indicator(
         self, canvas: np.ndarray, finger_count: int, fw: int,
         tracking_held: bool = False,
+        volume_adjusting: bool = False, volume: float = 0.8,
     ) -> None:
+        if volume_adjusting:
+            title = f"VOLUME: {volume:.0%}"
+            hint = "Adjust pinch, hold briefly to set. V to lock."
+            for text, y, scale in ((title, 50, 0.9), (hint, 75, 0.55)):
+                (tw, _), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, scale, 2)
+                cv2.putText(canvas, text, ((fw - tw) // 2, y),
+                            cv2.FONT_HERSHEY_SIMPLEX, scale, (100, 230, 230), 2)
+            return
         if finger_count <= 0:
             cv2.putText(canvas, "Hold 1-5 fingers still to select a loop",
                         (max(12, fw // 2 - 230), 50), cv2.FONT_HERSHEY_SIMPLEX,
                         0.65, (210, 210, 210), 2)
+            cv2.putText(canvas, "V: adjust / lock volume",
+                        (max(12, fw // 2 - 100), 75), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.55, (210, 210, 210), 1)
             return
         text  = f"TARGET: LOOP {finger_count}"
         color = LOOP_COLORS[finger_count - 1]
         (tw, _), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_DUPLEX, 1.0, 2)
         cv2.putText(canvas, text, ((fw - tw) // 2, 50),
                     cv2.FONT_HERSHEY_DUPLEX, 1.0, color, 2)
-        hint = "Tracking briefly lost - selection held" if tracking_held else "Swipe right to start / left to stop"
+        hint = ("Tracking briefly lost - selection held" if tracking_held else
+                "Swipe right to start / left to stop | V: volume")
         (hw, _), _ = cv2.getTextSize(hint, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 1)
         cv2.putText(canvas, hint, ((fw - hw) // 2, 75),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.55, (210, 210, 210), 1)
@@ -957,6 +1043,7 @@ class GestureMusicController:
 
         # Sub-systems
         self.audio    = AudioEngine(cfg, demo_mode)
+        self.volume_control = PinchVolumeControl(cfg)
         self.gesture  = GestureEngine(cfg)
         self.anim     = AnimationManager()
         self.renderer = Renderer(cfg)
@@ -1040,11 +1127,15 @@ class GestureMusicController:
     def _handle_gesture(self, hand_results, fw: int, now: float,
                         fh: Optional[int] = None) -> dict:
         """Update gesture state and loops.  Returns a summary for the log."""
-        info: dict = {"hand": False}
+        info: dict = {"hand": False, "volume": round(self.audio.master_volume, 4),
+                      "volume_adjusting": self.volume_control.enabled}
         if not hand_results.multi_hand_landmarks:
+            if self.volume_control.enabled:
+                self.volume_control.hand_lost()
+                self.gesture._reset_hand()
             self.gesture.hand_lost(now)
             info.update(fingers=self.gesture.finger_count, raw_fingers=0,
-                        tracking_held=self.gesture.tracking_held)
+                        tracking_held=self.gesture.tracking_held, volume_adjusting=False)
             return info
 
         hand_lm = hand_results.multi_hand_landmarks[0]
@@ -1054,10 +1145,15 @@ class GestureMusicController:
 
         finger_count, velocity = self.gesture.update_hand(
             hand_lm, label, fw, now, fh or self.cfg.frame_height)
-        self.audio.set_volume(self.gesture.pinch_volume)
         info.update(hand=True, handedness=label, fingers=finger_count,
                     raw_fingers=self.gesture.raw_finger_count,
                     tracking_held=False, vel=round(velocity, 4))
+
+        if self.volume_control.enabled:
+            self.audio.set_volume(self.volume_control.update(hand_lm, now, fw, fh or self.cfg.frame_height))
+            self.gesture._clear_stroke()
+            info["volume"] = round(self.audio.master_volume, 4)
+            return info
 
         swipe = self.gesture.detect_swipe(now)
         if swipe is None:
@@ -1127,6 +1223,11 @@ class GestureMusicController:
             log.info("Visual mode → Reality")
         elif key == ord("h"):
             self.show_help = not self.show_help
+        elif key == ord("v"):
+            self.volume_control.set_enabled(not self.volume_control.enabled, self.audio.master_volume)
+            self.gesture._reset_hand()
+            log.info("Volume %s at %.0f%%", "adjustment enabled" if self.volume_control.enabled else "locked",
+                     self.audio.master_volume * 100)
         elif key == ord("s"):
             fname = f"screenshot_{int(time.time())}.png"
             cv2.imwrite(fname, canvas)
@@ -1218,7 +1319,8 @@ class GestureMusicController:
                             self.renderer.draw_face_mesh(canvas, fl, fw, fh)
 
                 self.renderer.draw_target_indicator(
-                    canvas, self.gesture.finger_count, fw, self.gesture.tracking_held
+                    canvas, self.gesture.finger_count, fw, self.gesture.tracking_held,
+                    self.volume_control.enabled, self.audio.master_volume,
                 )
 
                 active_anims  = self.anim.tick(now)
@@ -1301,6 +1403,9 @@ def run_header(cfg: Config, source_kind: str, input_path: Optional[Path]) -> dic
     return {
         "source": source_kind,
         "input": str(input_path) if input_path else None,
+        "code_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        "python": sys.version.split()[0],
+        "python_executable": sys.executable,
         "started": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "swipe_velocity_threshold": cfg.swipe_velocity_threshold,
         "velocity_units": "frame_widths_per_second",
@@ -1313,6 +1418,11 @@ def run_header(cfg: Config, source_kind: str, input_path: Optional[Path]) -> dic
         "motion_release_speed": cfg.motion_release_speed,
         "motion_release_s": cfg.motion_release_s,
         "action_cooldown": cfg.action_cooldown,
+        "volume_mode": "explicit_v_toggle",
+        "volume_settle_s": cfg.volume_settle_s,
+        "volume_spread_range": cfg.volume_spread_range,
+        "volume_stability_tolerance": cfg.volume_stability_tolerance,
+        "volume_motion_limit": cfg.volume_motion_limit,
         "mediapipe": mp.__version__,
         "opencv": cv2.__version__,
     }
