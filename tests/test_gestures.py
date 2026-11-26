@@ -167,13 +167,20 @@ class SwipeTest(unittest.TestCase):
             self.feed(1.5 + i / 30, 0.4 + 0.7 * i / 30, pose=self.five)
         self.assertEqual(self.events, [("right", 5)])
 
-    def test_cooldown_applies_even_if_a_swipe_has_no_audio_action(self):
+    def test_only_a_recorded_action_starts_the_cooldown(self):
+        # Wind-up to the left, then the intended swipe right straight after.
         self.ready()
         for i in range(1, 10):
-            self.feed(0.5 + i / 30, 0.4 + 0.7 * i / 30)
-        for i in range(1, 8):
-            self.feed(0.8 + i / 30, 0.61 - 0.7 * i / 30)
-        self.assertEqual(self.events, [("right", 1)])
+            self.feed(0.5 + i / 30, 0.4 - 0.7 * i / 30)
+        for i in range(1, 12):
+            self.feed(0.8 + i / 30, 0.19 + 0.7 * i / 30)
+        self.assertEqual(self.events, [("left", 1), ("right", 1)])
+        # Once the caller records an action, the return stroke is ignored.
+        self.g.record_action(1.2)
+        self.events = []
+        for i in range(1, 12):
+            self.feed(1.2 + i / 30, 0.45 - 0.7 * i / 30)
+        self.assertEqual(self.events, [])
 
     def test_selection_updates_while_the_hand_moves_slowly(self):
         self.ready()
@@ -192,6 +199,55 @@ class SwipeTest(unittest.TestCase):
         for i in range(8):        # back in view, drifting at 0.2 widths/s
             self.feed(1.5 + i / 30, 0.3 + 0.2 * i / 30, pose=self.five)
         self.assertEqual(self.g.finger_count, 5)
+
+
+def controller():
+    """A controller without camera, window or audio, for gesture → loop tests."""
+    c = object.__new__(app.GestureMusicController)
+    c.cfg = app.Config()
+    c.audio = app.AudioEngine(c.cfg, demo_mode=True)
+    c.volume_control = app.PinchVolumeControl(c.cfg)
+    c.gesture = app.GestureEngine(c.cfg)
+    c.loop_states = [{"status": "inactive"} for _ in range(5)]
+    c.master_clock, c.master_length = None, 0.0
+    c.quant_queue, c.stop_queue = [], []
+    c.anim = SimpleNamespace(add=lambda *args, **kwargs: None)
+    return c
+
+
+class ControllerSwipeTest(unittest.TestCase):
+    def setUp(self):
+        self.c = controller()
+        self.one = next(p for p in POSES if p["expected"] == 1)
+        self.events = []
+
+    def frame(self, t, x):
+        self.c._process_queues(t)
+        result = SimpleNamespace(multi_hand_landmarks=[hand(self.one, x=x, y=0.65)],
+                                 multi_handedness=[])
+        info = self.c._handle_gesture(result, 1280, t, 720)
+        if "swipe" in info:
+            self.events.append((info["swipe"], info["fingers"], info.get("action")))
+
+    def test_wind_up_before_a_swipe_does_not_block_it(self):
+        for i in range(16):
+            self.frame(i / 30, 0.4)
+        for i in range(1, 10):    # wind-up left: loop 1 is not playing, no-op
+            self.frame(0.5 + i / 30, 0.4 - 0.7 * i / 30)
+        for i in range(1, 12):    # the intended swipe right
+            self.frame(0.8 + i / 30, 0.19 + 0.7 * i / 30)
+        self.assertEqual(self.events, [("left", 1, None), ("right", 1, "start")])
+        self.assertEqual(self.c.loop_states[0]["status"], "locked")
+
+    def test_return_stroke_after_a_start_does_not_stop_the_loop(self):
+        for i in range(16):
+            self.frame(i / 30, 0.4)
+        for i in range(1, 12):
+            self.frame(0.5 + i / 30, 0.4 + 0.7 * i / 30)
+        for i in range(1, 12):    # hand swings back at once
+            self.frame(0.87 + i / 30, 0.65 - 0.7 * i / 30)
+        self.assertEqual(self.events, [("right", 1, "start")])
+        self.assertEqual(self.c.loop_states[0]["status"], "locked")
 
 
 if __name__ == "__main__":

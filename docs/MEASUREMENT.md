@@ -18,14 +18,19 @@ was changed, not that the problem is solved.
 | Scripted extras / min | Fired in a scripted clip with nothing intended | replay |
 | Software latency (ms) | From reading the camera frame that triggered an immediate loop start to the `play()` call | live log |
 
-A **swipe** is what `GestureEngine.detect_swipe` emits. In R1 it requires a
-settled target (1–5), observed horizontal travel of at least 9% of image width
-within a 0.45 s window, smoothed speed of at least 0.35 image widths/s, and the
-cooldown to have elapsed. Motion must span at least 0.06 s and include multiple
-moving samples; a stroke emits at most once. The target is latched for that
-stroke. It is counted whether or not it changed a loop, so the counts do not
-depend on which loops happened to be playing. The original baseline used
-instantaneous finger count and a 45 px/frame threshold instead.
+A **swipe** is what `GestureEngine.detect_swipe` emits. It requires a target
+(1–5) that held for 0.12 s while the hand moved slower than swipe speed; the
+target is fixed when the stroke reaches swipe speed. The stroke needs observed
+horizontal travel of at least 9% of image width within a 0.45 s window,
+smoothed speed of at least 0.35 image widths/s, at least 0.06 s of motion with
+multiple moving samples, and the cooldown to have elapsed. A stroke emits at
+most once. Every emitted swipe is counted, whether or not it changed a loop.
+
+Since 2026-11-26 the 0.8 s cooldown starts only after a swipe that started,
+queued or stopped a loop, so a no-op swipe (such as a wind-up in the opposite
+direction) does not block the swipe that follows. Counts can therefore depend
+on which loops were playing. The original baseline used the instantaneous
+finger count, a 45 px/frame threshold and a cooldown after every swipe.
 
 Scripted clips are scored by aligning the intended sequence with the detected
 one (edit distance). Timing is not checked, only order.

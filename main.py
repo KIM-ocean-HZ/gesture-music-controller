@@ -560,7 +560,10 @@ class GestureEngine:
 
         A settled target stays fixed through a stroke even if finger landmarks
         flicker. Require observed horizontal travel, speed and several samples.
-        Emit once per stroke; a missing hand can never emit a command.
+        Emit once per stroke; a missing hand can never emit a command. The
+        caller starts the cooldown only when the swipe changed a loop, so a
+        wind-up in the opposite direction (always a no-op for the intended
+        loop) does not block the swipe that follows it.
         """
         if (not self._tracked or self._stroke_target <= 0 or self._stroke_fired
                 or not self.cooldown_ok(current_time) or len(self._motion) < 3):
@@ -580,7 +583,6 @@ class GestureEngine:
         direction = "right" if dx > 0 else "left"
         self.swipe_fingers = self._stroke_target
         self._stroke_fired = True
-        self.record_action(current_time)
         return direction
 
     def check_nod(self, face_landmarks, current_time: float) -> Optional[float]:
@@ -1210,6 +1212,10 @@ class GestureMusicController:
                 color=LOOP_COLORS[idx],
                 priority=self._action_priority(idx, "stopping"),
             )
+        if "action" in info:
+            # Only a swipe that changed a loop starts the cooldown; it blocks
+            # the return stroke. A no-op swipe (e.g. a wind-up) does not.
+            self.gesture.record_action(now)
         return info
 
     # ------------------------------------------------------------------
