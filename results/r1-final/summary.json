@@ -1,0 +1,147 @@
+{
+  "purpose": "unlabelled failure diagnosis; no accuracy or false-trigger claim",
+  "source_sha256": "8d6508eec8b646eef731f311079428c1064f9984a3575451a3a234d90824f805",
+  "source_root": "/Users/hzjin/PycharmProjects/Open-CV",
+  "harness_sha256": "d87c3850baded4e8cb7c883a1726606415d5481880b8a8114271dc115c904c45",
+  "config": {
+    "camera_index": 0,
+    "frame_width": 1280,
+    "frame_height": 720,
+    "swipe_velocity_threshold": 0.35,
+    "swipe_min_distance": 0.09,
+    "swipe_window_s": 0.45,
+    "swipe_min_duration_s": 0.06,
+    "velocity_smoothing_s": 0.06,
+    "selection_settle_s": 0.12,
+    "tracking_grace_s": 0.22,
+    "motion_release_speed": 0.12,
+    "motion_release_s": 0.12,
+    "action_cooldown": 0.8,
+    "nod_cooldown": 0.15,
+    "nod_amplitude_threshold": 0.004,
+    "head_history_len": 4,
+    "default_volume": 0.8,
+    "pinch_min_dist": 0.04,
+    "pinch_max_dist": 0.22,
+    "dashboard_height": 120,
+    "dashboard_alpha": 0.75,
+    "fps_smoothing": 30,
+    "sound_sets": {
+      "HousePiano": [
+        "loop1.wav",
+        "loop2.wav",
+        "loop3.wav",
+        "loop4.wav",
+        "loop5.wav"
+      ],
+      "BluesGuitar": [
+        "guitar1.wav",
+        "guitar2.wav",
+        "guitar3.wav",
+        "guitar4.wav",
+        "guitar5.wav"
+      ],
+      "FunkGuitar": [
+        "funk1.wav",
+        "funk2.wav",
+        "funk3.wav",
+        "funk4.wav",
+        "funk5.wav"
+      ]
+    },
+    "startup_sound": "startup.wav",
+    "confirm_sound": "confirm.wav"
+  },
+  "clips": [
+    {
+      "clip": "s1-normal-idle.mp4",
+      "sha256": "1fa1b1cb16ff0d2c6616ed193c3afd2d443b80dcb4f59cb4125037d9cfdf6f64",
+      "timestamps_sha256": "76c9127b3c8ad766e1b07b8303be33bc98d4c01f09d4caaafc7c8df8c86c1fb3",
+      "resolution": [
+        1280,
+        720
+      ],
+      "frames": 1980,
+      "capture_span_s": 72.31522679328918,
+      "frames_without_detection": 291,
+      "detected_finger_histogram": {
+        "0": 67,
+        "1": 437,
+        "2": 429,
+        "3": 288,
+        "4": 235,
+        "5": 233
+      },
+      "swipes": []
+    },
+    {
+      "clip": "s1-normal-scripted.mp4",
+      "sha256": "7a33446755a4834eb95e201a78cb9791f2fd445dd83f8337092cc4ae320c7a39",
+      "timestamps_sha256": "9e1a5d22975a03c594d111424ed5e37ca1139506e2982336029333788c48299b",
+      "resolution": [
+        1280,
+        720
+      ],
+      "frames": 682,
+      "capture_span_s": 24.469729900360107,
+      "frames_without_detection": 146,
+      "detected_finger_histogram": {
+        "0": 138,
+        "5": 24,
+        "1": 358,
+        "2": 16
+      },
+      "swipes": [
+        {
+          "frame": 197,
+          "time_s": 7.262,
+          "direction": "left",
+          "fingers": 1,
+          "action": null
+        },
+        {
+          "frame": 324,
+          "time_s": 11.763,
+          "direction": "left",
+          "fingers": 1,
+          "action": null
+        },
+        {
+          "frame": 440,
+          "time_s": 15.877,
+          "direction": "right",
+          "fingers": 1,
+          "action": "start"
+        },
+        {
+          "frame": 468,
+          "time_s": 16.94,
+          "direction": "right",
+          "fingers": 1,
+          "action": null
+        },
+        {
+          "frame": 490,
+          "time_s": 17.798,
+          "direction": "right",
+          "fingers": 1,
+          "action": null
+        },
+        {
+          "frame": 577,
+          "time_s": 20.798,
+          "direction": "left",
+          "fingers": 1,
+          "action": "stop"
+        },
+        {
+          "frame": 601,
+          "time_s": 21.664,
+          "direction": "left",
+          "fingers": 1,
+          "action": null
+        }
+      ]
+    }
+  ]
+}
