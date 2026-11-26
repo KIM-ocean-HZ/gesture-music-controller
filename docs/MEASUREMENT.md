@@ -18,10 +18,14 @@ was changed, not that the problem is solved.
 | Scripted extras / min | Fired in a scripted clip with nothing intended | replay |
 | Software latency (ms) | From reading the camera frame that triggered an immediate loop start to the `play()` call | live log |
 
-A **swipe** is what `GestureEngine.detect_swipe` emits: at least one finger
-extended, smoothed wrist velocity beyond the threshold, cooldown elapsed. It is
-counted whether or not it changed a loop, so the counts do not depend on which
-loops happened to be playing.
+A **swipe** is what `GestureEngine.detect_swipe` emits. In R1 it requires a
+settled target (1–5), observed horizontal travel of at least 9% of image width
+within a 0.45 s window, smoothed speed of at least 0.35 image widths/s, and the
+cooldown to have elapsed. Motion must span at least 0.06 s and include multiple
+moving samples; a stroke emits at most once. The target is latched for that
+stroke. It is counted whether or not it changed a loop, so the counts do not
+depend on which loops happened to be playing. The original baseline used
+instantaneous finger count and a 45 px/frame threshold instead.
 
 Scripted clips are scored by aligning the intended sequence with the detected
 one (edit distance). Timing is not checked, only order.
@@ -61,13 +65,15 @@ recorded timing. `recordings/` is git-ignored: the clips show your face.
 **Clip kinds** (about 60 s each)
 
 - `idle` — hand in view, doing things that are not commands: holding up
-  fingers without swiping, pinching to change volume, drifting slowly, turning
+  fingers without swiping, pinching, drifting slowly, turning
   the hand, reaching for the keyboard, nodding along. Every detected swipe is a
   false trigger.
 - `scripted` — the fixed sequence `R1 R2 R3 L1 L2 L3 R4 R5 L4 L5 R1 L1`
   (R/L = swipe right/left, digit = fingers shown), one gesture about every 4 s,
   at a natural speed. If you perform a gesture wrongly, either re-record or set
   `expected` to what you actually did.
+  With R1, hold the fingers briefly until `TARGET: LOOP N` shows the intended
+  number, then swipe. Keep this preparation consistent when recording new clips.
 
 **Conditions**
 
@@ -125,12 +131,46 @@ starts as above. For each, take the first frame where the wrist starts the
 swipe and the first frame where the loop's attack shows in the audio track.
 Report the median and the resolution (±17 ms at 60 fps).
 
-## Open questions for the first baseline
+## R1: failed baseline attempt and development diagnostics
 
-- **Thumb direction.** `count_fingers` treats a right-hand thumb as extended
-  when its tip is to the right of the joint below it, in the mirrored image.
-  For a palm facing the camera that may be reversed. The scripted clips'
-  wrong-loop count will show whether finger counts are off by one.
-- **Frame-rate dependence.** The swipe threshold is in pixels per frame. Webcams
-  often drop frame rate in low light, which makes the same hand speed cover more
-  pixels per frame. Compare the `fps` column of low-light and normal clips.
+On 2026-11-06 the user reported that swipes could not be triggered reliably,
+palm-facing finger counts were wrong, and the number disappeared during fast
+movement. The scripted sequence could not be completed. The user requested
+evidence preservation and an immediate first repair instead of completing the
+full baseline protocol first. See [REPAIR-R1.md](REPAIR-R1.md).
+
+The two frozen clips are **unlabelled development diagnostics**. Do not fill in
+the standard 12-action sequence just because one file is named `scripted`, or
+report hit rates from it. Do not count every no-hand frame as tracking loss:
+the hand is genuinely absent in parts and no complete `absent` annotation exists.
+
+```bash
+# Existing local frozen copies; each output directory must be new.
+python bench/diagnose.py \
+  --source-root recordings/repair-r1-evidence/before-source \
+  --out results/r1-before-repeat \
+  --clip recordings/repair-r1-evidence/clips/*.mp4
+python bench/diagnose.py --out results/r1-after-repeat \
+  --clip recordings/repair-r1-evidence/clips/*.mp4
+```
+
+This saves source/clip hashes, capture spans, event lists and per-frame landmarks
+without assigning ground truth. Counts from these runs are diagnostic evidence,
+not a substitute for the formal measurement protocol above. Logs and private
+video remain git-ignored. The hand-only numeric regression fixtures are derived
+from visually inspected development frames, so they are not independent test data.
+
+R1 replaces screen-direction finger counting with joint geometry, and uses
+timestamped, width-normalized wrist motion. A stable target is held for at most
+0.22 s of tracking loss. No command fires without a detected hand, and motion
+history restarts on reacquisition: a swipe that happens entirely while tracking
+is lost can still be missed. Low-light, fast-motion and occlusion performance,
+live frame intervals and latency still need fresh measurement.
+
+The R1 volume follow-up locks volume by default. Press `v` for explicit pinch
+adjustment; swipes are suppressed in that mode, and loss of tracking locks the
+last committed volume. Raw video and frame timestamps do **not** record keyboard
+events: standard replay tests the default locked-volume loop-control path. Test
+the active volume mode separately with a live `--log` run and the volume regression
+tests. New frame logs record `volume`, `volume_adjusting`, source hash and Python
+environment so volume changes and the running version can be checked.

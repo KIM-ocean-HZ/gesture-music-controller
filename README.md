@@ -1,6 +1,6 @@
 # Gesture Music Controller
 
-Real-time, hands-free music loop station driven entirely by your webcam.  
+Real-time music loop station controlled with webcam hand gestures.
 Hand gestures start and stop audio loops; in the Artistic view, head nods flash the screen. No hardware beyond a laptop required.
 
 Built with **MediaPipe**, **OpenCV**, and **pygame** as a computer-vision portfolio project, inspired by loop stations and DJ performance.
@@ -19,10 +19,10 @@ Built with **MediaPipe**, **OpenCV**, and **pygame** as a computer-vision portfo
 | Feature | Detail |
 |---|---|
 | **Real-time hand detection** | MediaPipe Hands — 21 landmarks, one hand tracked |
-| **Handedness-aware finger counting** | The thumb test flips direction for left and right hands |
-| **EMA-smoothed swipe detection** | Exponential moving average over wrist velocity damps jitter |
+| **Geometric finger counting** | Joint shape and palm-relative distances count fingers without a fixed palm/back thumb direction |
+| **Time-based swipe detection** | Smoothed wrist speed plus horizontal travel; the selected loop stays fixed during a stroke |
 | **Loops start on master-loop boundaries** | The first loop starts immediately and sets the master loop; later loops start, and stopped loops end, at its next boundary |
-| **Pinch volume control** | Thumb–index spread adjusts master volume in real time |
+| **Explicit pinch volume control** | Press `v` to adjust, then pinch and briefly hold; volume stays locked during normal loop gestures |
 | **Head-nod detection** | In Artistic mode, a nose-tip Y-velocity reversal flashes the screen |
 | **Three sound sets** | HousePiano / BluesGuitar / FunkGuitar — switching stops the current loops |
 | **Two visual modes** | Reality (camera passthrough) and Artistic (landmark skeleton on black) |
@@ -36,11 +36,11 @@ Built with **MediaPipe**, **OpenCV**, and **pygame** as a computer-vision portfo
 
 ## Technical Highlights
 
-- **Temporal smoothing** — an EMA (α = 0.4) over wrist x-velocity; a swipe fires above 45 px/frame. Smoothing damps tremor at the cost of some lag; neither has been measured yet.
+- **Timestamped gestures** — wrist speed uses image widths per second, with a 60 ms smoothing time constant. A swipe requires speed, horizontal displacement and multiple observed motion samples. A 120 ms settled finger count selects the loop; momentary finger-count changes during a stroke do not change its target.
 - **Loop quantisation** — `math.ceil((t - clock_start) / loop_length)` gives the next master-loop boundary. Queued loops start, and stopping loops end, on that boundary, so loops stay phase-aligned. It aligns to the master loop, not to individual beats.
 - **One frame loop** — hand landmarks, face landmarks and the master-loop clock are handled together in one pass per camera frame.
 - **Graceful degradation** — the `--demo` flag disables audio entirely; missing asset files produce warnings rather than crashes.
-- **Handedness-aware thumb check** — MediaPipe labels hands assuming a mirrored image, so the frame is flipped first and `count_fingers()` uses opposite x-directions for the left and right thumb.
+- **Palm/back finger geometry** — finger extension uses joint angles and distances in aspect-corrected landmark coordinates. Brief tracking loss holds the selection for up to 220 ms; reacquisition starts a new motion history so a jump in tracking cannot itself trigger a loop.
 - **Priority-aware animation system** — lower-priority HUD notifications are suppressed when a more important action fires.
 - **Replayable measurement** — recorded clips keep each frame's capture time, so replay reproduces the timing that cooldowns and loop boundaries depend on.
 
@@ -95,8 +95,8 @@ python main.py --camera 1 --width 1920 --height 1080
 # Audio-free demo — no .wav files needed
 python main.py --demo
 
-# Lower swipe sensitivity (default: 45 px/frame)
-python main.py --swipe-threshold 30
+# Require faster swipes (default: 0.35 image widths/second)
+python main.py --swipe-threshold 0.5
 
 # Minimal hand-tracking only (no audio, simpler UI)
 python demo_simple.py
@@ -106,10 +106,10 @@ python demo_simple.py
 
 | Gesture | Action |
 |---|---|
-| Show **N** fingers (1–5) | Target loop N |
+| Hold **N** fingers (1–5) briefly | Wait for `TARGET: LOOP N`, then swipe; the target stays fixed during the stroke |
 | **Swipe right** | Start targeted loop — immediately if nothing is playing, otherwise at the next master-loop boundary |
 | **Swipe left** | Stop targeted loop at the next master-loop boundary |
-| **Pinch** thumb + index | Control master volume (spread = louder) |
+| Press **v**, then pinch thumb + index | Adjust relative to the current volume; spread increases it, close decreases it; hold briefly to set. Press **v** again to lock. Losing hand tracking also locks the last value. |
 
 ### Keyboard
 
@@ -119,6 +119,7 @@ python demo_simple.py
 | `p` / `g` / `f` | HousePiano / BluesGuitar / FunkGuitar |
 | `s` | Save screenshot |
 | `h` | Toggle help overlay |
+| `v` | Enter / leave volume adjustment; loop swipes pause while adjusting |
 | `q` | Quit |
 
 ---
@@ -134,7 +135,12 @@ python bench/bench.py compare results/baseline results/<label>  # before → aft
 python -m unittest discover tests                               # tests for the metrics
 ```
 
-No results yet; they will be added here with the commit and clip set they came from.
+The first baseline attempt exposed basic usability failures and could not complete
+the scripted sequence. R1 preserves the original clips/code and replays them as
+development diagnostics; see [the evidence and repair record](docs/REPAIR-R1.md).
+The user reported improved palm counting and swipe target retention in a live
+check. The full three-session benchmark and systematic live measurements remain
+outstanding. A follow-up volume fix separates pinch adjustment from loop gestures.
 
 ---
 
@@ -173,6 +179,7 @@ gesture-music-controller/
 
 ## Changelog
 
+- **2026-11-06** — First repair after a failed baseline attempt: geometric finger counting, timestamped swipe detection, a settled/latched loop target, and a short tracking-loss grace period. User reported improvement in a live check. Added failure diagnostics and regression fixtures. A follow-up fix locks volume by default and uses `v` to enable relative, settled pinch adjustment. `--swipe-threshold` now uses image widths/second rather than pixels/frame. The formal benchmark remains pending.
 - **2026-11-05** — Restarted the project. Corrected README claims that had no code or measurement behind them (a CPU latency figure, "nearest beat" quantisation, the reason audio files are not included). Added clip recording, headless replay, per-frame logs, a measurement script and tests. A swipe now restarts the cooldown even when it does not change a loop. Pinned MediaPipe to 0.10.21.
 - **2026-04-10** — First public version.
 

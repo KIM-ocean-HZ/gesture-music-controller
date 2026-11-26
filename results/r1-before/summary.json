@@ -1,0 +1,92 @@
+{
+  "purpose": "unlabelled failure diagnosis; no accuracy or false-trigger claim",
+  "source_sha256": "0de23266f206e6417d7b9460d660e116136e21e596fc2b555f9881ba25a55365",
+  "source_root": "recordings/repair-r1-evidence/before-source",
+  "harness_sha256": "71bb0743fb664b83f5ad45fe7cc69d9c92d1af1057dd31f77294e2ea41cac2f2",
+  "config": {
+    "camera_index": 0,
+    "frame_width": 1280,
+    "frame_height": 720,
+    "swipe_velocity_threshold": 45,
+    "action_cooldown": 0.8,
+    "ema_alpha": 0.4,
+    "nod_cooldown": 0.15,
+    "nod_amplitude_threshold": 0.004,
+    "head_history_len": 4,
+    "default_volume": 0.8,
+    "pinch_min_dist": 0.04,
+    "pinch_max_dist": 0.22,
+    "dashboard_height": 120,
+    "dashboard_alpha": 0.75,
+    "fps_smoothing": 30,
+    "sound_sets": {
+      "HousePiano": [
+        "loop1.wav",
+        "loop2.wav",
+        "loop3.wav",
+        "loop4.wav",
+        "loop5.wav"
+      ],
+      "BluesGuitar": [
+        "guitar1.wav",
+        "guitar2.wav",
+        "guitar3.wav",
+        "guitar4.wav",
+        "guitar5.wav"
+      ],
+      "FunkGuitar": [
+        "funk1.wav",
+        "funk2.wav",
+        "funk3.wav",
+        "funk4.wav",
+        "funk5.wav"
+      ]
+    },
+    "startup_sound": "startup.wav",
+    "confirm_sound": "confirm.wav"
+  },
+  "clips": [
+    {
+      "clip": "s1-normal-idle.mp4",
+      "sha256": "1fa1b1cb16ff0d2c6616ed193c3afd2d443b80dcb4f59cb4125037d9cfdf6f64",
+      "timestamps_sha256": "76c9127b3c8ad766e1b07b8303be33bc98d4c01f09d4caaafc7c8df8c86c1fb3",
+      "resolution": [
+        1280,
+        720
+      ],
+      "frames": 1980,
+      "capture_span_s": 72.31522679328918,
+      "frames_without_detection": 291,
+      "detected_finger_histogram": {
+        "1": 407,
+        "2": 223,
+        "0": 273,
+        "3": 277,
+        "4": 379,
+        "5": 130
+      },
+      "swipes": []
+    },
+    {
+      "clip": "s1-normal-scripted.mp4",
+      "sha256": "7a33446755a4834eb95e201a78cb9791f2fd445dd83f8337092cc4ae320c7a39",
+      "timestamps_sha256": "9e1a5d22975a03c594d111424ed5e37ca1139506e2982336029333788c48299b",
+      "resolution": [
+        1280,
+        720
+      ],
+      "frames": 682,
+      "capture_span_s": 24.469729900360107,
+      "frames_without_detection": 146,
+      "detected_finger_histogram": {
+        "5": 11,
+        "4": 8,
+        "2": 10,
+        "0": 135,
+        "1": 365,
+        "3": 7
+      },
+      "swipes": []
+    }
+  ]
+}
