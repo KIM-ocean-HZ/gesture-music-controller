@@ -92,7 +92,8 @@ class Config:
     swipe_min_duration_s: float = 0.06
     velocity_smoothing_s: float = 0.06   # time constant, independent of FPS
     selection_settle_s: float = 0.12
-    tracking_grace_s: float = 0.22       # hold selection, never guess lost motion
+    tracking_grace_s: float = 0.22       # hold selection; a stroke may continue
+    gap_jump_speed_limit: float = 4.0    # frame widths / s across a gap; faster is another hand
     motion_release_speed: float = 0.12  # frame widths / second
     motion_release_s: float = 0.12
     action_cooldown: float = 0.8         # minimum seconds between actions
@@ -511,6 +512,14 @@ class GestureEngine:
         lm = hand_landmarks.landmark
         sample = (current_time, lm[0].x, lm[0].y * frame_height / frame_width)
         previous = self._last_sample if self._tracked else None
+        if previous is None and self._stroke_sign and self._last_sample is not None:
+            # Found again within the grace period, further along a stroke that
+            # was under way when it was lost: a fast flick blurs the hand for
+            # a frame or two. Carry the stroke across the gap, unless the jump
+            # is faster than a hand moves (another hand, or a false detection).
+            jump = (sample[1] - self._last_sample[1]) / (current_time - self._last_sample[0])
+            if 0 < jump * self._stroke_sign <= self.cfg.gap_jump_speed_limit:
+                previous = self._last_sample
         self._tracked = True
         self.tracking_held = False
         self._last_seen = current_time
@@ -553,11 +562,12 @@ class GestureEngine:
         return self.finger_count, self.ema_velocity
 
     def hand_lost(self, current_time: float):
+        # The stroke and its smoothed speed are kept for the grace period, so
+        # update_hand can carry a stroke across the gap; nothing fires
+        # without a hand.
         self._tracked = False
         self.raw_finger_count = 0
-        self.ema_velocity = 0.0
         self._candidate_since = None
-        self._clear_stroke()
         if self._last_seen is None or current_time - self._last_seen > self.cfg.tracking_grace_s:
             self._reset_hand()
         else:
