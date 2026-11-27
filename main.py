@@ -8,8 +8,9 @@ and head-motion recognition (MediaPipe + OpenCV).
 Controls
 --------
 Gesture (fingers shown)  1–5  →  target loop 1–5
-Swipe right              →  queue / start targeted loop on next beat
-Swipe left               →  stop targeted loop on next beat
+Swipe right              →  start targeted loop (at once from silence,
+                             otherwise at the next master-loop boundary)
+Swipe left               →  stop targeted loop at the next master-loop boundary
 V, then pinch           →  adjust volume; V again locks the current level
 
 Keyboard:
