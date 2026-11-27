@@ -297,6 +297,15 @@ class ControllerSwipeTest(unittest.TestCase):
         self.assertEqual(self.c.loop_states[0]["status"], "locked")
         self.assertEqual(self.c.stop_queue, [])
 
+    def test_stopped_loops_are_reported_for_the_log(self):
+        self.c.loop_states[0]["status"] = "stopping"
+        self.c.stop_queue = [{"index": 0, "stop_time": 8.0}]
+        self.c._process_queues(7.9)
+        self.assertEqual(self.c.last_stopped, [])
+        self.c._process_queues(8.0)
+        self.assertEqual(self.c.last_stopped, [0])
+        self.assertEqual(self.c.loop_states[0]["status"], "inactive")
+
     def test_return_stroke_that_outlasts_the_cooldown_does_not_fire(self):
         t = self.rest(-1 / 30, 0.4, 0.5)
         t, x = self.stroke(t, 0.4, +1)            # start from silence
