@@ -99,6 +99,26 @@ recorded timing. `recordings/` is git-ignored: the clips show your face.
 Record the full set in at least three separate sessions (different days or
 times of day). Name clips `s<N>-<condition>-<kind>.mp4`.
 
+**2026-11 measurement (one session, fixed before recording).** The user chose
+one session. The `scripted` sequence is the user's performance set, written
+down on 2026-11-27 before any measured take:
+`R1 L1 R2 R3 L2 R4 L3 R5 R1 L5 R2 L2 L4 L1` (14 gestures, performed in groups
+of one to three per master loop:
+`R1 | L1 R2 R3 | L2 R4 | L3 R5 | R1 | L5 R2 | L2 L4 | L1`). It replaces the
+12-gesture sequence above for this measurement, with the same sequence in
+every condition. Take rules:
+
+- Every take recorded with `--record` into `recordings/formal/` counts; none
+  is deleted or chosen afterwards. Practice runs are not recorded.
+- Go through the whole sequence once; do not repeat a gesture the app missed.
+  Mistakes of your own are reported afterwards and written into `expected`.
+- One sound set per take (`--sound-set`), no set switching. The video take
+  may use `v` and the visual-mode keys; these are not replayed.
+- `fast` idle clips are quick movements that are not commands (shaking the
+  hand, vertical waves, reaching for the keyboard).
+- The performer practised against the current version, not the baseline;
+  results are reported with that caveat.
+
 **Manifest** — copy `bench/clips.example.csv` to `recordings/clips.csv` and
 list every clip: `clip,condition,kind,expected,absent,sound_set,notes`.
 `sound_set` is the set the clip was performed with (default HousePiano).
