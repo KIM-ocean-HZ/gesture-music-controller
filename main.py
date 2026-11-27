@@ -1061,6 +1061,7 @@ class GestureMusicController:
         demo_mode: bool = False,
         source=None,
         recorder: Optional[ClipRecorder] = None,
+        screen_recorder: Optional[ClipRecorder] = None,
         frame_log: Optional[FrameLog] = None,
         headless: bool = False,
     ):
@@ -1069,6 +1070,8 @@ class GestureMusicController:
         self.visual_mode: str  = "reality"
         self.show_help: bool   = False
         self.recorder   = recorder
+        self.screen_recorder = screen_recorder   # what the window shows
+        self.last_stopped: List[int] = []
         self.frame_log  = frame_log
         self.headless   = headless
 
@@ -1134,8 +1137,10 @@ class GestureMusicController:
 
     # ------------------------------------------------------------------
     def _process_queues(self, now: float) -> List[Tuple[int, float]]:
-        """Start / stop due loops.  Returns [(loop index, perf time of play)]."""
+        """Start / stop due loops.  Returns [(loop index, perf time of play)];
+        loops stopped in this call are left in self.last_stopped."""
         played: List[Tuple[int, float]] = []
+        self.last_stopped = []
         for item in self.quant_queue[:]:
             if now >= item["start_time"]:
                 idx = item["index"]
@@ -1151,6 +1156,7 @@ class GestureMusicController:
                 idx = item["index"]
                 self.loop_states[idx]["status"] = "inactive"
                 self.audio.stop_loop(idx)
+                self.last_stopped.append(idx)
                 self.stop_queue.remove(item)
         return played
 
@@ -1337,6 +1343,8 @@ class GestureMusicController:
                     rec = {"i": frame_idx, "t": round(now, 6), **info}
                     if played:
                         rec["played"] = [i + 1 for i, _ in played]
+                    if self.last_stopped:
+                        rec["stopped"] = [i + 1 for i in self.last_stopped]
                     if self.source.live:
                         rec["perf_read"] = round(t_read, 6)
                         if played:
@@ -1397,6 +1405,8 @@ class GestureMusicController:
                 if self.show_help:
                     canvas = self.renderer.draw_help_overlay(canvas)
 
+                if self.screen_recorder:
+                    self.screen_recorder.write(canvas, now)
                 cv2.imshow("Gesture Music Controller", canvas)
                 key = cv2.waitKey(1) & 0xFF
                 if key != 255 and not self._handle_key(key, canvas):
@@ -1412,6 +1422,8 @@ class GestureMusicController:
         self.source.release()
         if self.recorder:
             self.recorder.close()
+        if self.screen_recorder:
+            self.screen_recorder.close()
         if self.frame_log:
             self.frame_log.close()
         if not self.headless:
@@ -1446,6 +1458,9 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--record",          type=Path, metavar="FILE",
                    help="Save raw camera frames to FILE (.mp4 or .avi) "
                         "plus a .frames.csv of capture times")
+    p.add_argument("--record-screen", type=Path, metavar="FILE",
+                   help="Also save the window as shown (UI included, no sound) "
+                        "plus a .frames.csv; the log's played/stopped events give the audio")
     p.add_argument("--input",           type=Path, metavar="FILE",
                    help="Replay a recorded clip instead of the camera "
                         "(headless unless --show; audio off)")
@@ -1506,13 +1521,18 @@ if __name__ == "__main__":
     else:
         source = CameraSource(cfg)
 
-    recorder = None
-    if args.record:
+    if args.input and args.record_screen:
+        sys.exit("--record-screen needs the live camera; it cannot be used with --input.")
+    recorder = screen_recorder = None
+    if args.record or args.record_screen:
         ok, probe, _ = source.read()   # first frame fixes the clip size
         if not ok:
             sys.exit("Camera returned no frame; nothing to record.")
         h, w = probe.shape[:2]
-        recorder = ClipRecorder(args.record, source.nominal_fps, (w, h))
+        if args.record:
+            recorder = ClipRecorder(args.record, source.nominal_fps, (w, h))
+        if args.record_screen:
+            screen_recorder = ClipRecorder(args.record_screen, source.nominal_fps, (w, h))
 
     frame_log = None
     if args.log:
@@ -1526,6 +1546,7 @@ if __name__ == "__main__":
         demo_mode = args.demo or bool(args.input),
         source    = source,
         recorder  = recorder,
+        screen_recorder = screen_recorder,
         frame_log = frame_log,
         headless  = bool(args.input) and not args.show,
     ).run()
