@@ -22,7 +22,7 @@
 - 用户原话及初始文件哈希：`recordings/repair-r1-evidence/original-evidence.json`。
 - 各版源文件、运行器、录像、时间 CSV、结果和逐帧日志的 SHA-256：`recordings/repair-r1-evidence/manifest.json`。
 - 运行环境记录：同目录 `environment.json`；Python 3.10.5、MediaPipe 0.10.21、OpenCV 4.12.0.88、NumPy 1.26.4、pygame 2.6.1。**更正（2026-11-26）：** 实际加载的 OpenCV 是 4.11.0，见文末补记。
-- 用户报告已存入 Spool「音乐项目重启」。原始录像、面部画面和逐帧日志继续留在 git-ignored 目录内。
+- 原始录像、面部画面和逐帧日志继续留在 git-ignored 目录内。
 
 | 冻结视频 | 帧数／CSV 行数 | 按采集时间计算的跨度 | 视频 SHA-256 |
 |---|---:|---:|---|
