@@ -35,6 +35,16 @@ playing. Counts can therefore depend on which loops were playing. The original
 baseline used the instantaneous finger count, a 45 px/frame threshold and a
 cooldown after every swipe.
 
+Since 2026-11-27 a stroke that is under way when the hand is lost continues
+if the hand is found again within 0.22 s, further along in the same
+direction, at no more than 4 image widths/s across the gap; the swipe can then
+fire on the frame the hand is found. Before, motion restarted on every
+reacquisition. In the first `fast` take the hand was lost for 65–210 ms in the
+middle of most quick flicks, so the flick never fired and the slower stroke
+back did. The speed limit keeps a jump to another hand from counting: in the
+R1 idle clip one hand leaves the bottom of the frame and the other is found
+32% of the width away one frame later (5 widths/s).
+
 Scripted clips are scored by aligning the intended sequence with the detected
 one (edit distance). Timing is not checked, only order.
 
@@ -140,6 +150,13 @@ Takes as recorded and decided (2026-11-27):
     `notes` if a meter is available; mean frame brightness is reported
     either way.
 - Optional `normal` idle, about 60 s.
+- `fast` first take (20:42): played once, not twice. When quick flicks did
+  not register, the performer redid them slowly (performer's report), so the
+  take cannot be scored against the sequence. It is kept and used as the
+  development clip for the gap change above. A second `fast` take is recorded
+  after that change and after the performer has re-tested it live; the
+  second take is the one scored, with that caveat. The other conditions are
+  still not practised before their take.
 - All takes use the same command as the `normal` take (`--record`,
   `--record-screen`, `--log`), so the live frame rate is comparable.
 
@@ -224,7 +241,8 @@ R1 replaces screen-direction finger counting with joint geometry, and uses
 timestamped, width-normalized wrist motion. A stable target is held for at most
 0.22 s of tracking loss. No command fires without a detected hand, and motion
 history restarts on reacquisition: a swipe that happens entirely while tracking
-is lost can still be missed. Low-light, fast-motion and occlusion performance,
+is lost can still be missed. (Since 2026-11-27 a stroke under way can continue
+across a short loss; see the swipe definition above.) Low-light, fast-motion and occlusion performance,
 live frame intervals and latency still need fresh measurement.
 
 The R1 volume follow-up locks volume by default. Press `v` for explicit pinch

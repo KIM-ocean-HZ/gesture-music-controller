@@ -118,6 +118,70 @@ class SwipeTest(unittest.TestCase):
             self.feed(0.65 + i / 30, 0.8 - 0.7 * i / 30, pose=self.five)
         self.assertEqual(self.events, [("left", 1)])
 
+    # A fast flick as in recordings/formal/s1-fast-scripted: the hand speeds
+    # up over a few frames (about 3% of the width, not a swipe yet), is lost
+    # to motion blur for a frame or more, and is found further along.
+    ONSET = (0.008, 0.012, 0.016)
+
+    def onset(self, sign, fps=30):
+        t, x = self.ready(fps=fps), 0.4
+        for step in self.ONSET:
+            t, x = t + 1 / fps, x + sign * step
+            self.feed(t, x)
+        self.assertEqual(self.events, [])
+        return t, x
+
+    def gap(self, t, frames, fps=30):
+        for _ in range(frames):
+            t += 1 / fps
+            self.g.hand_lost(t)
+            self.assertIsNone(self.g.detect_swipe(t))
+        return t
+
+    def test_fast_flick_through_a_short_tracking_gap_fires(self):
+        for sign in (-1, 1):
+            for lost in (1, 2, 4):
+                with self.subTest(direction=sign, lost_frames=lost):
+                    self.g, self.events = app.GestureEngine(app.Config()), []
+                    t, x = self.onset(sign)
+                    t = self.gap(t, lost)
+                    self.feed(t + 1 / 30, x + sign * (0.06 + 0.03 * lost))
+                    self.assertEqual(self.events, [("right" if sign > 0 else "left", 1)])
+                    for i in range(1, 4):  # the rest of the flick does not fire again
+                        self.feed(t + (1 + i) / 30, x + sign * (0.09 + 0.03 * lost + 0.02 * i))
+                    self.assertEqual(len(self.events), 1)
+
+    def test_hand_found_back_where_it_came_from_does_not_continue_the_stroke(self):
+        t, x = self.onset(+1)
+        t = self.gap(t, 2)
+        for i in range(1, 4):
+            self.feed(t + i / 30, x - 0.02)
+        self.assertEqual(self.events, [])
+
+    def test_gap_longer_than_the_grace_period_does_not_continue_the_stroke(self):
+        t, x = self.onset(+1)
+        t = self.gap(t, 8)                         # 0.27 s without a hand
+        for i in range(1, 4):
+            self.feed(t + i / 30, x + 0.1 + 0.02 * i)
+        self.assertEqual(self.events, [])
+
+    def test_jump_faster_than_a_hand_is_not_a_stroke(self):
+        # recordings/repair-r1-evidence idle clip, 8.3 s: one hand leaves at
+        # the bottom while moving slowly, the other is found 32% of the width
+        # away one frame later.
+        t, x = self.onset(+1)
+        t = self.gap(t, 1)
+        for i in range(1, 4):
+            self.feed(t + i / 30, x + 0.32 + 0.002 * i)
+        self.assertEqual(self.events, [])
+
+    def test_no_stroke_before_the_gap_means_no_swipe_across_it(self):
+        t = self.ready()
+        t = self.gap(t, 2)
+        for i in range(1, 4):
+            self.feed(t + i / 30, 0.4 + 0.15 + 0.01 * i)
+        self.assertEqual(self.events, [])
+
     def test_long_loss_clears_selection_and_motion(self):
         self.ready()
         self.g.hand_lost(0.8)
@@ -321,6 +385,27 @@ class ControllerSwipeTest(unittest.TestCase):
         for i in range(1, 12):    # the intended swipe right
             self.frame(0.8 + i / 30, 0.19 + 0.7 * i / 30)
         self.assertEqual(self.events, [("left", 1, None), ("right", 1, "start")])
+        self.assertEqual(self.c.loop_states[0]["status"], "locked")
+
+    def test_fast_flick_and_its_return_through_tracking_gaps_start_one_loop(self):
+        def lost(t):
+            self.c._handle_gesture(SimpleNamespace(multi_hand_landmarks=None,
+                                                   multi_handedness=None), 1280, t, 720)
+            self.c._process_queues(t)
+        for i in range(16):
+            self.frame(i / 30, 0.4)
+        t, x = 0.5, 0.4
+        for sign in (+1, -1):     # flick right, swing back left at once
+            for step in (0.008, 0.012, 0.016):
+                t, x = t + 1 / 30, x + sign * step
+                self.frame(t, x)
+            for _ in range(2):
+                t, x = t + 1 / 30, x + sign * 0.06
+                lost(t)
+            for _ in range(3):
+                t, x = t + 1 / 30, x + sign * 0.02
+                self.frame(t, x)
+        self.assertEqual(self.events, [("right", 1, "start")])
         self.assertEqual(self.c.loop_states[0]["status"], "locked")
 
     def test_return_stroke_after_a_start_does_not_stop_the_loop(self):
