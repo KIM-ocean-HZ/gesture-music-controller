@@ -1,191 +1,158 @@
 # Gesture Music Controller
 
-Real-time music loop station controlled with webcam hand gestures.
-Hand gestures start and stop audio loops; in the Artistic view, head nods flash the screen. No hardware beyond a laptop required.
+A loop station played with one hand in front of a laptop webcam. Show 1–5
+fingers to pick a loop, swipe right to start it and swipe left to stop it.
+Loops start and stop on the boundary of the first loop, so they stay in
+time. Built with MediaPipe, OpenCV and pygame.
 
-Built with **MediaPipe**, **OpenCV**, and **pygame** as a computer-vision portfolio project, inspired by loop stations and DJ performance.
+![Artistic mode: face and hand landmarks, loops 1, 2 and 5 playing](docs/images/artistic-mode.png)
 
----
+## What it does
 
-## Demo
+- **Loop selection by finger count.** Fingers are counted from joint angles
+  and distances, so the palm or the back of the hand can face the camera.
+  The count must hold for 0.12 s before it becomes the target.
+- **Swipe to start or stop.** A swipe needs horizontal speed and travel,
+  measured in image widths per second from frame timestamps. The target is
+  fixed when the stroke reaches swipe speed.
+- **Loops in time.** The first loop starts immediately and sets the master
+  loop. Later starts and all stops wait for its next boundary. A left swipe
+  on a waiting loop cancels its start; a right swipe on a stopping loop
+  keeps it playing.
+- **Wind-ups and returns.** A 0.8 s cooldown follows only swipes that
+  change a loop, so a wind-up in the other direction does not block the
+  swipe after it. A stroke that begins during the cooldown, such as the hand
+  swinging back, never fires.
+- **Fast flicks.** A quick flick often blurs the hand out of tracking for a
+  few frames. If the hand reappears within 0.22 s further along the same
+  direction, the swipe continues. Jumps faster than 4 image widths/s are
+  treated as a different hand.
+- **Volume** is locked by default. Press `v`, pinch thumb and index finger
+  and hold to set it; press `v` again to lock.
+- **Two views.** Reality shows the camera; Artistic draws the hand and face
+  landmarks on black and flashes on a head nod.
+- **Three sound sets** (HousePiano, BluesGuitar, FunkGuitar).
+- **Measurement tools.** Record clips with frame timestamps, replay them
+  headless through any commit, and score them
+  ([docs/MEASUREMENT.md](docs/MEASUREMENT.md)).
 
-> Run `python demo_simple.py` for an audio-free hand-tracking preview.  
-> Run `python main.py --demo` to see the full UI without needing any audio files.
+## Tested
 
----
+Measured on 2026-11-27 ([full results and conditions](docs/RESULTS-2026-11-27.md)):
+one performer, one session, MacBook Pro (M4 Max) built-in camera at
+1280×720, a pre-registered 14-gesture sequence. Four takes (normal light,
+fast flicks, holding a drumstick, low light), 112 intended gestures, replayed
+through three versions of the code:
 
-## Features
+| Condition | Before any change (`d600ad5`) | Before the fast-flick change (`cefbcd7`) | Current (`e4398d9`) |
+|---|---|---|---|
+| Normal light | 15.0% | 100% | 100% |
+| Fast flicks | 23.3% | 73.3% | 100% |
+| Holding a drumstick | 23.5% | 76.5% | 97.1% |
+| Low light (screen only) | 10.7% | 35.7% | 89.3% |
+| **All, 112 gestures** | **18.8%** | **69.6%** | **96.4%** |
 
-| Feature | Detail |
-|---|---|
-| **Real-time hand detection** | MediaPipe Hands — 21 landmarks, one hand tracked |
-| **Geometric finger counting** | Joint shape and palm-relative distances count fingers without a fixed palm/back thumb direction |
-| **Time-based swipe detection** | Smoothed wrist speed plus horizontal travel; the selected loop stays fixed during a stroke |
-| **Loops start on master-loop boundaries** | The first loop starts immediately and sets the master loop; later loops start, and stopped loops end, at its next boundary |
-| **Explicit pinch volume control** | Press `v` to adjust, then pinch and briefly hold; volume stays locked during normal loop gestures |
-| **Head-nod detection** | In Artistic mode, a nose-tip Y-velocity reversal flashes the screen |
-| **Three sound sets** | HousePiano / BluesGuitar / FunkGuitar — switching stops the current loops |
-| **Two visual modes** | Reality (camera passthrough) and Artistic (landmark skeleton on black) |
-| **Loop-progress rings** | Dashboard circles fill and pulse once per master loop |
-| **Animated HUD panels** | Slide-in/out action notifications with cubic easing |
-| **Screenshot on demand** | Press `s` — saved to project root |
-| **Measurement tools** | Record clips, replay them headless, and compute tracking loss, false triggers, hit rate and software latency ([docs/MEASUREMENT.md](docs/MEASUREMENT.md)) |
-| **CLI arguments** | Camera index, resolution, swipe threshold, demo mode, record / replay / log |
+Scripted hit rate: the intended swipe detected with the right direction and
+finger count. Extra swipes, fired when nothing was intended, ran at 2.35 per
+minute in replay with the current version, against 1.41 before the
+fast-flick change. In the live takes none of them changed a loop.
 
----
+Software latency, from reading the triggering camera frame to the `play()`
+call, for a loop started from silence: median 8.2 ms (14 starts, live).
+This leaves out camera capture and audio output.
 
-## Technical Highlights
+**Not tested:** more than one performer or session; false triggers while
+idle; end-to-end gesture-to-sound latency; the volume pinch and head nod;
+other cameras, resolutions or rooms. The performer practised with the
+current version, and some intended sequences are the performer's own
+account (details in the results).
 
-- **Timestamped gestures** — wrist speed uses image widths per second, with a 60 ms smoothing time constant. A swipe requires speed, horizontal displacement and multiple observed motion samples. A 120 ms settled finger count selects the loop; momentary finger-count changes during a stroke do not change its target.
-- **Loop quantisation** — `math.ceil((t - clock_start) / loop_length)` gives the next master-loop boundary. Queued loops start, and stopping loops end, on that boundary, so loops stay phase-aligned. It aligns to the master loop, not to individual beats.
-- **One frame loop** — hand landmarks, face landmarks and the master-loop clock are handled together in one pass per camera frame.
-- **Graceful degradation** — the `--demo` flag disables audio entirely; missing asset files produce warnings rather than crashes.
-- **Palm/back finger geometry** — finger extension uses joint angles and distances in aspect-corrected landmark coordinates. Brief tracking loss holds the selection for up to 220 ms; reacquisition starts a new motion history so a jump in tracking cannot itself trigger a loop.
-- **Priority-aware animation system** — lower-priority HUD notifications are suppressed when a more important action fires.
-- **Replayable measurement** — recorded clips keep each frame's capture time, so replay reproduces the timing that cooldowns and loop boundaries depend on.
+## Running it
 
----
-
-## Tech Stack
-
-- **Python 3.9+**
-- **MediaPipe 0.10.21** (pinned) — Hands, FaceMesh
-- **OpenCV 4.8+** — capture, drawing, display
-- **NumPy** — frame compositing, overlay blending
-- **pygame** — audio playback (44.1 kHz, 512-sample buffer)
-
----
-
-## Installation
+Tested with Python 3.10.5, MediaPipe 0.10.21, OpenCV 4.11.0, pygame 2.6.1
+on macOS.
 
 ```bash
 git clone https://github.com/KIM-ocean-HZ/gesture-music-controller.git
 cd gesture-music-controller
 pip install -r requirements.txt
-```
 
-### Audio files
-
-The `.wav` loops are not included in the repository.  
-Place **five audio loops per set** in the `assets/` folder using these names:
-
-```
-assets/
-├── loop1.wav  … loop5.wav      # HousePiano set
-├── guitar1.wav … guitar5.wav   # BluesGuitar set
-├── funk1.wav  … funk5.wav      # FunkGuitar set
-├── startup.wav                  # played on launch
-└── confirm.wav                  # played on sound-set switch
-```
-
-Any 44 100 Hz WAV works; the first loop you start sets the master-loop length.  
-The app logs a warning for missing files and keeps running.
-
----
-
-## Usage
-
-```bash
-# Full controller (requires audio files in assets/)
-python main.py
-
-# Specify a different camera or resolution
+python main.py                      # camera 0, 1280×720, HousePiano
+python main.py --demo               # no audio files needed
 python main.py --camera 1 --width 1920 --height 1080
-
-# Audio-free demo — no .wav files needed
-python main.py --demo
-
-# Require faster swipes (default: 0.35 image widths/second)
-python main.py --swipe-threshold 0.5
-
-# Minimal hand-tracking only (no audio, simpler UI)
-python demo_simple.py
+python main.py --sound-set FunkGuitar
+python -m unittest discover tests   # 51 tests
 ```
 
-### Gesture controls
+**Audio files are not included.** The loops were made from Logic Pro's
+sample content; which packs they came from was not recorded. Put 44.1 kHz
+16-bit WAVs in `assets/`: `loop1–5.wav` (HousePiano), `guitar1–5.wav`
+(BluesGuitar), `funk1–5.wav` (FunkGuitar), plus `startup.wav` and
+`confirm.wav`. Missing files are logged and skipped.
 
-| Gesture | Action |
+| Gesture or key | Action |
 |---|---|
-| Hold **N** fingers (1–5) briefly | Wait for `TARGET: LOOP N`, then swipe; the target stays fixed during the stroke |
-| **Swipe right** | Start targeted loop — immediately if nothing is playing, otherwise at the next master-loop boundary |
-| **Swipe left** | Stop targeted loop at the next master-loop boundary |
-| Press **v**, then pinch thumb + index | Adjust relative to the current volume; spread increases it, close decreases it; hold briefly to set. Press **v** again to lock. Losing hand tracking also locks the last value. |
+| Show 1–5 fingers | Wait for `TARGET: LOOP N` |
+| Swipe right | Start loop N (immediately from silence, otherwise at the next boundary) |
+| Swipe left | Stop loop N at the next boundary |
+| `v`, then pinch and hold | Set volume; `v` again locks it |
+| `1` / `2` | Artistic / Reality view |
+| `p` / `g` / `f` | HousePiano / BluesGuitar / FunkGuitar (stops current loops) |
+| `s` / `h` / `q` | Screenshot / help / quit |
 
-### Keyboard
-
-| Key | Action |
-|---|---|
-| `1` / `2` | Artistic / Reality visual mode |
-| `p` / `g` / `f` | HousePiano / BluesGuitar / FunkGuitar |
-| `s` | Save screenshot |
-| `h` | Toggle help overlay |
-| `v` | Enter / leave volume adjustment; loop swipes pause while adjusting |
-| `q` | Quit |
-
----
-
-## Measurement
-
-Changes to recognition are measured on the same recorded clips before and after, under normal light, low light, fast motion and partial occlusion. The protocol and metric definitions are in [docs/MEASUREMENT.md](docs/MEASUREMENT.md).
+### Recording and measuring
 
 ```bash
-python main.py --demo --record recordings/s1-normal-idle.mp4   # record a clip
-python bench/bench.py replay --label baseline                   # replay all clips
-python bench/bench.py compare results/baseline results/<label>  # before → after
-python -m unittest discover tests                               # tests for the metrics
+python main.py --record recordings/take.mp4 --log recordings/take.jsonl
+python bench/bench.py replay --label mylabel --manifest recordings/clips.csv
+python bench/bench.py compare results/s1-baseline results/mylabel
+python bench/bench.py latency recordings/take.jsonl
 ```
 
-The first baseline attempt exposed basic usability failures and could not complete
-the scripted sequence. R1 preserves the original clips/code and replays them as
-development diagnostics; see [the evidence and repair record](docs/REPAIR-R1.md).
-The user reported improved palm counting and swipe target retention in a live
-check. The full three-session benchmark and systematic live measurements remain
-outstanding. A follow-up volume fix separates pinch adjustment from loop gestures.
+`--record-screen FILE` also saves the window as shown, and
+`tools/render_video.py` adds a soundtrack mixed from the WAVs at the
+logged start and stop times. Recordings show the performer and are kept out
+of the repository.
 
----
-
-## Project Structure
+## Project structure
 
 ```
-gesture-music-controller/
-├── main.py            # Full gesture controller (AudioEngine, GestureEngine, Renderer)
-├── demo_simple.py     # Audio-free hand-tracking demo
-├── bench/
-│   ├── bench.py       # Replay clips, compute metrics, compare runs
-│   └── clips.example.csv
-├── docs/
-│   └── MEASUREMENT.md # Recording protocol and metric definitions
-├── tests/
-│   └── test_bench.py
-├── requirements.txt
-├── .gitignore
-└── assets/            # Place your .wav files here (excluded from git)
-    └── .gitkeep
+main.py                 controller: camera, gestures, audio, rendering
+demo_simple.py          hand tracking only, no audio
+bench/bench.py          replay clips, score them, compare runs, latency
+bench/diagnose.py       replay unlabelled clips for diagnosis
+tools/render_video.py   demo video from a screen recording and its log
+tests/                  finger-count fixtures, swipe, volume and bench tests
+docs/MEASUREMENT.md     protocol and metric definitions
+docs/RESULTS-2026-11-27.md
+docs/REPAIR-R1.md       first repair record (in Chinese)
+results/*/summary.json  per-clip numbers for each measured version
 ```
-
----
-
-## Roadmap
-
-- [ ] Baseline measurement of the current version on recorded clips
-- [ ] Low-light handling, measured before and after
-- [ ] Motion-blur handling, measured before and after
-- [ ] Partial-occlusion handling, measured before and after
-- [ ] End-to-end gesture-to-sound latency (external recording)
-- [ ] Custom gesture mapping via a JSON config file
-- [ ] Two-hand support — one hand selects loop, other hand controls FX
-
----
 
 ## Changelog
 
-- **2026-11-06** — First repair after a failed baseline attempt: geometric finger counting, timestamped swipe detection, a settled/latched loop target, and a short tracking-loss grace period. User reported improvement in a live check. Added failure diagnostics and regression fixtures. A follow-up fix locks volume by default and uses `v` to enable relative, settled pinch adjustment. `--swipe-threshold` now uses image widths/second rather than pixels/frame. The formal benchmark remains pending.
-- **2026-11-05** — Restarted the project. Corrected README claims that had no code or measurement behind them (a CPU latency figure, "nearest beat" quantisation, the reason audio files are not included). Added clip recording, headless replay, per-frame logs, a measurement script and tests. A swipe now restarts the cooldown even when it does not change a loop. Pinned MediaPipe to 0.10.21.
+- **2026-11-27** — A swipe continues across a short loss of tracking, so
+  quick flicks register. First full measurement: four conditions, three code
+  versions ([results](docs/RESULTS-2026-11-27.md)). `--record-screen`, loop
+  stops in the frame log, and a demo-video renderer.
+- **2026-11-26** — The thumb counts only when it sticks out past the index
+  knuckle; in a live check the performer reported 4 and 5 were no longer
+  confused with the back of the hand to the camera. The loop target updates
+  while the hand moves and is fixed at swipe speed. Cooldown only after
+  swipes that change a loop; strokes begun during the cooldown never fire. A
+  swipe can cancel a pending start or stop. A loop started from silence plays
+  in the frame that triggered it. Replays use the real loop lengths and the
+  clip's sound set (`--sound-set`).
+- **2026-11-06** — First repair after a failed baseline attempt: finger
+  counting from joint geometry, timestamped swipe detection, a settled loop
+  target and a 0.22 s tracking grace period. Volume locked by default.
+  ([record](docs/REPAIR-R1.md))
+- **2026-11-05** — Restarted the project. Removed README claims with no code
+  or measurement behind them. Added clip recording, headless replay,
+  per-frame logs, a measurement script and tests. Pinned MediaPipe 0.10.21.
 - **2026-04-10** — First public version.
-
----
 
 ## Author
 
-**Hanze JIN** — BSc Computer Science, University of Nottingham  
+**Hanze JIN** — BSc Computer Science, University of Nottingham
 [GitHub: KIM-ocean-HZ](https://github.com/KIM-ocean-HZ)
