@@ -119,6 +119,30 @@ every condition. Take rules:
 - The performer practised against the current version, not the baseline;
   results are reported with that caveat.
 
+Takes as recorded and decided (2026-11-27):
+
+- `normal` scripted (16:16): one take, also used for the demo video. The
+  user restarted after six gestures (`R1 L1 R2 R3`, then `L2 L3` to stop
+  those loops) and then played the whole set once without error. Both
+  passes are scored: `expected` is those six followed by the 14.
+- `fast`, `occlusion`, `lowlight` scripted (decided before recording): one
+  take each, the whole set twice, then `q`. Nothing is retried or corrected.
+  The performing hand stays in frame from the first gesture to the last,
+  also while waiting for a loop boundary. These conditions are not practised
+  with the app before their take.
+  - `fast`: fingers shown and held until the target shows, as in `normal`;
+    only the swipe itself is a quick flick. Normal room light.
+  - `occlusion`: a drumstick held in the performing hand throughout, in one
+    grip that allows all five counts, chosen without the app running.
+    Normal room light.
+  - `lowlight`: room lights off, curtains closed, the laptop screen at its
+    usual brightness as the only light. A lux reading at the hand goes in
+    `notes` if a meter is available; mean frame brightness is reported
+    either way.
+- Optional `normal` idle, about 60 s.
+- All takes use the same command as the `normal` take (`--record`,
+  `--record-screen`, `--log`), so the live frame rate is comparable.
+
 **Manifest** — copy `bench/clips.example.csv` to `recordings/clips.csv` and
 list every clip: `clip,condition,kind,expected,absent,sound_set,notes`.
 `sound_set` is the set the clip was performed with (default HousePiano).
